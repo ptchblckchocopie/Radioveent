@@ -4,23 +4,39 @@ import { useRouter } from "next/navigation";
 import { io as ioClient, type Socket } from "socket.io-client";
 import { nanoid } from "nanoid";
 import type { RoomSummary } from "@/lib/types";
+import { POKE_PLACES, POKE_PLACES_BY_ID, randomPlaceId } from "@/lib/places";
 import Avatar from "./Avatar";
+import PokePlace from "./PokePlace";
+
+function getStoredName() {
+  if (typeof window === "undefined") return "";
+  return localStorage.getItem("mq:name") || "";
+}
+function getStoredPokemonId(): number | null {
+  if (typeof window === "undefined") return null;
+  const v = localStorage.getItem("mq:pokemonId");
+  if (!v) return null;
+  const n = parseInt(v, 10);
+  return Number.isInteger(n) && n >= 1 && n <= 1025 ? n : null;
+}
 
 export default function LobbyClient() {
   const router = useRouter();
   const [rooms, setRooms] = useState<RoomSummary[]>([]);
-  const [newRoomName, setNewRoomName] = useState("");
-  const [creating, setCreating] = useState(false);
+  const [showCreate, setShowCreate] = useState(false);
+  const [storedName, setStoredNameState] = useState<string>("");
+  const [storedPid, setStoredPid] = useState<number | null>(null);
+
+  useEffect(() => {
+    setStoredNameState(getStoredName());
+    setStoredPid(getStoredPokemonId());
+  }, []);
 
   useEffect(() => {
     const socket: Socket = ioClient({ path: "/socket.io" });
-    socket.emit(
-      "subscribe_browse",
-      null,
-      (resp: { rooms?: RoomSummary[] }) => {
-        setRooms(resp?.rooms || []);
-      }
-    );
+    socket.emit("subscribe_browse", null, (resp: { rooms?: RoomSummary[] }) => {
+      setRooms(resp?.rooms || []);
+    });
     socket.on("rooms_updated", (list: RoomSummary[]) => {
       setRooms(Array.isArray(list) ? list : []);
     });
@@ -30,125 +46,220 @@ export default function LobbyClient() {
     };
   }, []);
 
-  const handleCreate = (e: React.FormEvent) => {
-    e.preventDefault();
-    setCreating(true);
-    const id = nanoid(6);
-    const trimmed = newRoomName.trim().slice(0, 60);
-    const url = trimmed
-      ? `/r/${id}?name=${encodeURIComponent(trimmed)}`
-      : `/r/${id}`;
-    router.push(url);
-  };
-
   return (
-    <main className="min-h-screen p-4 md:p-8 max-w-5xl mx-auto">
-      <header className="text-center mb-10">
-        <h1 className="text-4xl md:text-5xl font-bold tracking-tight">MusicQueue</h1>
-        <p className="text-gray-400 mt-2 text-sm md:text-base">
-          Browse rooms or start your own. Send the link, vibe together.
-        </p>
-      </header>
-
-      <section className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 mb-8">
-        <h2 className="text-lg font-semibold mb-3">Create a new room</h2>
-        <form onSubmit={handleCreate} className="flex gap-2 flex-wrap">
-          <input
-            value={newRoomName}
-            onChange={(e) => setNewRoomName(e.target.value)}
-            placeholder="Name your room (optional, e.g. Friday Night Vibes)"
-            maxLength={60}
-            className="flex-1 min-w-[200px] bg-zinc-800 border border-zinc-700 rounded-md px-3 py-2 outline-none focus:border-indigo-400"
-          />
-          <button
-            type="submit"
-            disabled={creating}
-            className="bg-indigo-500 hover:bg-indigo-400 disabled:opacity-50 text-white font-semibold px-5 py-2 rounded-md whitespace-nowrap"
-          >
-            Create
-          </button>
-        </form>
-        <p className="text-xs text-gray-500 mt-2">
-          You'll get a shareable link after picking your name and Pokémon.
-        </p>
-      </section>
-
-      <section>
-        <h2 className="text-lg font-semibold mb-3">
-          Active rooms{" "}
-          <span className="text-sm text-gray-500 font-normal">
-            ({rooms.length})
+    <div className="page">
+      <div className="dash">
+        <div className="dash-header">
+          <span className="brand">
+            <span className="live-dot" />
+            Veent Radio
           </span>
-        </h2>
-        {rooms.length === 0 ? (
-          <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-8 text-center text-gray-500">
-            No active rooms — be the first.
-          </div>
-        ) : (
-          <ul className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            {rooms.map((r) => (
-              <RoomCard
-                key={r.id}
-                room={r}
-                onJoin={() => router.push(`/r/${r.id}`)}
-              />
-            ))}
-          </ul>
-        )}
-      </section>
+          <span style={{ color: "var(--text-muted)", fontSize: 13 }}>
+            tonight's rooms · {rooms.reduce((n, r) => n + r.listenerCount, 0)} listening
+          </span>
+          {storedName && (
+            <div className="me">
+              <Avatar pokemonId={storedPid} size={32} />
+              <span className="name">{storedName}</span>
+            </div>
+          )}
+        </div>
 
-      <footer className="text-xs text-gray-600 text-center mt-12">
-        Rooms vanish 5 min after the last person leaves.
-      </footer>
-    </main>
+        <div className="dash-body scroll">
+          <div className="dash-section-head">
+            <h2>Radio</h2>
+            <div className="spacer" />
+            <button className="dash-create" onClick={() => setShowCreate(true)}>
+              <span className="plus-circle">+</span>
+              Create Radio
+            </button>
+          </div>
+
+          {rooms.length === 0 ? (
+            <div className="dash-empty">
+              <div style={{ fontSize: 48, marginBottom: 8 }}>🎧</div>
+              <div>No active rooms — be the first to start one.</div>
+            </div>
+          ) : (
+            <div className="dash-grid">
+              {rooms.map((r) => {
+                const place = r.placeId ? POKE_PLACES_BY_ID[r.placeId] : null;
+                return (
+                  <button
+                    key={r.id}
+                    className="radio-card"
+                    onClick={() => router.push(`/r/${r.id}`)}
+                  >
+                    <div className="cover" style={{ background: "transparent" }}>
+                      {r.placeId ? (
+                        <PokePlace placeId={r.placeId} size="card" />
+                      ) : r.currentTrack ? (
+                        <img src={r.currentTrack.thumbnail} alt="" />
+                      ) : (
+                        <span className="placeholder">🎵</span>
+                      )}
+                      <div className="cover-overlay">
+                        {r.currentTrack ? (
+                          <span className="live-pill">
+                            <span className="dot" />
+                            LIVE
+                          </span>
+                        ) : (
+                          <span className="quiet-pill">QUIET</span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="info">
+                      <h3>{r.name}</h3>
+                      <div
+                        style={{
+                          fontSize: 11,
+                          color: "var(--text-muted)",
+                          marginBottom: 6,
+                          textTransform: "uppercase",
+                          letterSpacing: "0.06em",
+                          fontWeight: 600,
+                        }}
+                      >
+                        {place ? `${place.name} · ${place.region}` : "no place set"}
+                      </div>
+                      <div className="now-line">
+                        {r.currentTrack ? `♫ ${r.currentTrack.title}` : "Nothing playing yet"}
+                      </div>
+                      <div className="meta">
+                        <span className="listeners">
+                          {r.avatars.slice(0, 5).map((id) => (
+                            <span key={id} className="a">
+                              <Avatar pokemonId={id} size={22} />
+                            </span>
+                          ))}
+                        </span>
+                        <span
+                          style={{
+                            flex: 1,
+                            minWidth: 0,
+                            whiteSpace: "nowrap",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                          }}
+                        >
+                          {r.listenerCount} listening
+                        </span>
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {showCreate && (
+        <CreateRoomModal
+          onCancel={() => setShowCreate(false)}
+          onCreate={(name, placeId) => {
+            const id = nanoid(6);
+            const params = new URLSearchParams();
+            const trimmed = name.trim().slice(0, 60);
+            if (trimmed) params.set("name", trimmed);
+            if (placeId) params.set("place", placeId);
+            const qs = params.toString();
+            router.push(`/r/${id}${qs ? `?${qs}` : ""}`);
+          }}
+        />
+      )}
+    </div>
   );
 }
 
-function RoomCard({ room, onJoin }: { room: RoomSummary; onJoin: () => void }) {
+function CreateRoomModal({
+  onCancel,
+  onCreate,
+}: {
+  onCancel: () => void;
+  onCreate: (name: string, placeId: string) => void;
+}) {
+  const [name, setName] = useState("");
+  const [placeId, setPlaceId] = useState<string>(() => randomPlaceId());
+
+  const place = POKE_PLACES_BY_ID[placeId];
+  const reroll = () => setPlaceId((p) => randomPlaceId(p));
+
   return (
-    <li className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 hover:border-zinc-700 transition flex gap-4 items-center">
-      {room.currentTrack ? (
-        <img
-          src={room.currentTrack.thumbnail}
-          alt=""
-          className="w-20 h-20 object-cover rounded-md flex-shrink-0"
-        />
-      ) : (
-        <div className="w-20 h-20 bg-zinc-800 rounded-md flex items-center justify-center text-3xl flex-shrink-0">
-          🎵
-        </div>
-      )}
-      <div className="flex-1 min-w-0">
-        <div className="font-semibold truncate">{room.name}</div>
-        {room.currentTrack ? (
-          <div className="text-xs text-gray-400 truncate">
-            ♫ {room.currentTrack.title}
+    <div className="modal-backdrop" onClick={onCancel}>
+      <div className="modal modal-create" onClick={(e) => e.stopPropagation()}>
+        <div className="create-hero">
+          <PokePlace placeId={placeId} size="hero" />
+          <div className="create-hero-overlay">
+            <div className="create-hero-meta">
+              <div className="loc-region">{place.region}</div>
+              <div className="loc-name">{place.name}</div>
+            </div>
+            <button className="reroll-btn" onClick={reroll} title="Pick another place">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 5.5A5 5 0 1 0 12 8.5" />
+                <path d="M12 2v3.5h-3.5" />
+              </svg>
+              Randomize
+            </button>
           </div>
-        ) : (
-          <div className="text-xs text-gray-500">Nothing playing yet</div>
-        )}
-        <div className="flex items-center gap-2 mt-2">
-          <div className="flex -space-x-1">
-            {room.avatars.slice(0, 5).map((id) => (
-              <Avatar
-                key={id}
-                pokemonId={id}
-                size={22}
-                className="ring-2 ring-zinc-900 bg-zinc-800 rounded-full"
-              />
+        </div>
+
+        <div className="create-body scroll">
+          <h2>Start a new radio</h2>
+          <p className="desc">
+            Name your room and pick a Pokémon-world setting. The place becomes your room's cover and vibe.
+          </p>
+
+          <div className="onb-field-label">Room name</div>
+          <input
+            className="onb-input"
+            autoFocus
+            placeholder="e.g. friday-night-vibes"
+            value={name}
+            maxLength={60}
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") onCancel();
+            }}
+          />
+
+          <div className="create-section-head">
+            <div className="onb-field-label" style={{ margin: 0 }}>Place</div>
+            <div className="create-section-sub">
+              {place.name} · {place.region}
+            </div>
+          </div>
+          <div className="place-grid">
+            {POKE_PLACES.map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                className={`place-tile ${p.id === placeId ? "selected" : ""}`}
+                onClick={() => setPlaceId(p.id)}
+                title={`${p.name} · ${p.region}`}
+              >
+                <div>
+                  <PokePlace placeId={p.id} size="thumb" />
+                </div>
+                <div className="place-tile-name">{p.name}</div>
+              </button>
             ))}
           </div>
-          <span className="text-xs text-gray-500">
-            {room.listenerCount} listening
-          </span>
+
+          <div className="actions">
+            <button className="modal-btn-secondary" onClick={onCancel}>Cancel</button>
+            <button
+              className="modal-btn-primary"
+              disabled={name.trim().length < 2}
+              onClick={() => onCreate(name, placeId)}
+            >
+              Create &amp; enter
+            </button>
+          </div>
         </div>
       </div>
-      <button
-        onClick={onJoin}
-        className="bg-indigo-500 hover:bg-indigo-400 text-white px-4 py-2 rounded-md text-sm font-medium flex-shrink-0"
-      >
-        Join
-      </button>
-    </li>
+    </div>
   );
 }

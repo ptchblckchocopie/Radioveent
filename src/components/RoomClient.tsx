@@ -1,14 +1,26 @@
 "use client";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { io, type Socket } from "socket.io-client";
-import type { ActivityEvent, ChatMessage, Mode, Playback, RoomSnapshot, Track, User } from "@/lib/types";
+import type {
+  ActivityEvent,
+  ChatMessage,
+  Mode,
+  Playback,
+  RepeatMode,
+  RoomSnapshot,
+  Track,
+  User,
+} from "@/lib/types";
 import AudioPlayer, { type AudioPlayerHandle } from "./AudioPlayer";
-import SearchBar, { type SearchResult, type TrackStatus } from "./SearchBar";
+import SearchOverlay from "./SearchOverlay";
+import { type SearchResult, type TrackStatus } from "./SearchBar";
 import SortableQueueItem from "./SortableQueueItem";
 import PokemonPicker from "./PokemonPicker";
 import Avatar from "./Avatar";
-import ActivityFeed from "./ActivityFeed";
 import ChatPanel from "./ChatPanel";
+import HistoryPanel from "./HistoryPanel";
+import LyricsPanel from "./LyricsPanel";
+import ShareButton from "./ShareButton";
 import pokemonList from "@/lib/pokemon.json";
 import {
   DndContext,
@@ -26,16 +38,14 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 
-function getStoredName(): string {
+function getStoredName() {
   if (typeof window === "undefined") return "";
   return localStorage.getItem("mq:name") || "";
 }
-
 function setStoredName(name: string) {
   if (typeof window === "undefined") return;
   localStorage.setItem("mq:name", name);
 }
-
 function getStoredPokemonId(): number | null {
   if (typeof window === "undefined") return null;
   const v = localStorage.getItem("mq:pokemonId");
@@ -43,7 +53,6 @@ function getStoredPokemonId(): number | null {
   const n = parseInt(v, 10);
   return Number.isInteger(n) && n >= 1 && n <= 1025 ? n : null;
 }
-
 function setStoredPokemonId(id: number) {
   if (typeof window === "undefined") return;
   localStorage.setItem("mq:pokemonId", String(id));
@@ -54,19 +63,67 @@ function randomPokemonId() {
   return POKEMON_LIST[Math.floor(Math.random() * POKEMON_LIST.length)].id;
 }
 
+const SettingsIcon = (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="12" cy="12" r="3" />
+    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+  </svg>
+);
+const HashIcon = (
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M4 9h16M4 15h16M10 3 8 21M16 3l-2 18" />
+  </svg>
+);
+const SearchIcon = (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="11" cy="11" r="7" />
+    <path d="m20 20-3.5-3.5" />
+  </svg>
+);
+const HeadphonesSmall = (
+  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M3 18v-6a9 9 0 0 1 18 0v6" /><path d="M21 19a2 2 0 0 1-2 2h-1v-7h3zM3 19a2 2 0 0 0 2 2h1v-7H3z" />
+  </svg>
+);
+const ChatTabIcon = (
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+  </svg>
+);
+const HistoryTabIcon = (
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M3 12a9 9 0 1 0 3-6.7L3 8" /><path d="M3 3v5h5" /><path d="M12 7v5l3 3" />
+  </svg>
+);
+const LyricsTabIcon = (
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M9 18V5l12-2v13" /><circle cx="6" cy="18" r="3" /><circle cx="18" cy="16" r="3" />
+  </svg>
+);
+const CrownIcon = (
+  <svg width="9" height="9" viewBox="0 0 24 24" fill="currentColor">
+    <path d="M3 7l4 4 5-7 5 7 4-4-2 12H5L3 7z" />
+  </svg>
+);
+
 export default function RoomClient({
   roomId,
   initialRoomName,
+  initialPlaceId,
 }: {
   roomId: string;
   initialRoomName?: string;
+  initialPlaceId?: string;
 }) {
+  // Identity / join gate
   const [name, setName] = useState<string>("");
   const [nameInput, setNameInput] = useState<string>("");
   const [pokemonId, setPokemonId] = useState<number | null>(null);
   const [pickedPokemonId, setPickedPokemonId] = useState<number | null>(null);
   const [joined, setJoined] = useState(false);
   const [connected, setConnected] = useState(false);
+
+  // Room state
   const [mode, setMode] = useState<Mode>("synced");
   const [hostUserId, setHostUserId] = useState<string | null>(null);
   const [youUserId, setYouUserId] = useState<string>("");
@@ -78,8 +135,11 @@ export default function RoomClient({
     positionSec: 0,
     serverUpdatedAt: Date.now(),
   });
+  const [shuffle, setShuffle] = useState(false);
+  const [repeat, setRepeat] = useState<RepeatMode>("off");
+
+  // UI state
   const [error, setError] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [activity, setActivity] = useState<ActivityEvent[]>([]);
@@ -87,8 +147,13 @@ export default function RoomClient({
   const [takenIds, setTakenIds] = useState<number[]>([]);
   const [pickError, setPickError] = useState<string | null>(null);
   const [roomName, setRoomName] = useState<string>("");
+  const [placeId, setPlaceId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState("");
+  const [rightTab, setRightTab] = useState<"chat" | "history" | "lyrics">("chat");
+  const [unreadChat, setUnreadChat] = useState(0);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [confirmingClear, setConfirmingClear] = useState(false);
 
   const socketRef = useRef<Socket | null>(null);
   const playerRef = useRef<AudioPlayerHandle>(null);
@@ -104,7 +169,7 @@ export default function RoomClient({
     setPickedPokemonId(storedPid ?? randomPokemonId());
   }, []);
 
-  // If the picked Pokémon becomes taken (e.g. someone else grabs it before you join), shuffle
+  // Auto-shuffle pokemon if it gets taken
   useEffect(() => {
     if (joined) return;
     if (!pickedPokemonId) return;
@@ -119,7 +184,7 @@ export default function RoomClient({
     }
   }, [takenIds, pickedPokemonId, joined]);
 
-  // Open socket once on mount; set up all listeners.
+  // Open socket once on mount, set up listeners
   useEffect(() => {
     const socket = io({ path: "/socket.io" });
     socketRef.current = socket;
@@ -138,9 +203,12 @@ export default function RoomClient({
       setActivity(snap.activity || []);
       setChat(snap.chat || []);
       setRoomName(snap.name || `Room ${snap.id}`);
+      setPlaceId(snap.placeId || null);
+      setShuffle(!!snap.shuffle);
+      setRepeat(snap.repeat || "off");
     });
-    socket.on("room_name_updated", ({ name }: { name: string }) => {
-      setRoomName(name);
+    socket.on("room_place_updated", ({ placeId }: { placeId: string | null }) => {
+      setPlaceId(placeId);
     });
     socket.on("activity_added", (e: ActivityEvent) => {
       setActivity((prev) => {
@@ -154,6 +222,7 @@ export default function RoomClient({
         return next.length > 100 ? next.slice(-100) : next;
       });
     });
+    socket.on("room_name_updated", ({ name }: { name: string }) => setRoomName(name));
     socket.on("users_updated", (u: User[]) => setUsers(u));
     socket.on("queue_updated", ({ queue, current }: { queue: Track[]; current: Track | null }) => {
       setQueue(queue);
@@ -164,6 +233,13 @@ export default function RoomClient({
       setMode(mode);
       setHostUserId(hostUserId);
     });
+    socket.on(
+      "playback_settings_updated",
+      ({ shuffle, repeat }: { shuffle: boolean; repeat: RepeatMode }) => {
+        setShuffle(!!shuffle);
+        setRepeat(repeat);
+      }
+    );
     socket.on("error_msg", ({ message }: { message: string }) => {
       setError(message);
       setTimeout(() => setError(null), 3000);
@@ -178,7 +254,7 @@ export default function RoomClient({
     };
   }, [roomId]);
 
-  // While on the join screen, peek the room to fetch the taken-Pokémon list
+  // Peek when not joined
   useEffect(() => {
     if (joined) return;
     const sock = socketRef.current;
@@ -192,7 +268,7 @@ export default function RoomClient({
     else sock.once("connect", doPeek);
   }, [joined, roomId]);
 
-  // Once user clicks Join, emit the join with ack and handle pokemon-taken rejection
+  // Send join when ready
   useEffect(() => {
     if (!joined || !name || !pokemonId) return;
     const sock = socketRef.current;
@@ -208,47 +284,106 @@ export default function RoomClient({
             setPickError("Someone else just picked that Pokémon. Choose another.");
             return;
           }
-          // If we navigated here with ?name=... and the room has no name yet, set it.
           if (initialRoomName && initialRoomName.trim()) {
             sock.emit("set_room_name", { name: initialRoomName.trim() });
-            // Clean the ?name= out of the URL so the share link is tidy
-            if (typeof window !== "undefined") {
-              const url = new URL(window.location.href);
-              url.searchParams.delete("name");
-              window.history.replaceState(null, "", url.pathname + url.search);
-            }
+          }
+          if (initialPlaceId) {
+            sock.emit("set_room_place", { placeId: initialPlaceId });
+          }
+          if ((initialRoomName || initialPlaceId) && typeof window !== "undefined") {
+            const url = new URL(window.location.href);
+            url.searchParams.delete("name");
+            url.searchParams.delete("place");
+            window.history.replaceState(null, "", url.pathname + url.search);
           }
         }
       );
     };
     if (sock.connected) doJoin();
     else sock.once("connect", doJoin);
-  }, [joined, name, pokemonId, roomId, initialRoomName]);
+  }, [joined, name, pokemonId, roomId, initialRoomName, initialPlaceId]);
 
-  const submitRename = () => {
-    const trimmed = nameDraft.trim().slice(0, 60);
-    if (trimmed && trimmed !== roomName) {
-      socketRef.current?.emit("set_room_name", { name: trimmed });
+  // ⌘K / Ctrl-K to open search
+  useEffect(() => {
+    if (!joined) return;
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setSearchOpen(true);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [joined]);
+
+  // Track unread chat
+  useEffect(() => {
+    if (rightTab === "chat") setUnreadChat(0);
+  }, [rightTab, chat.length]);
+  const lastChatLen = useRef(0);
+  useEffect(() => {
+    if (chat.length > lastChatLen.current && rightTab !== "chat") {
+      const newOnes = chat.slice(lastChatLen.current);
+      const fromOthers = newOnes.filter((m) => m.userName !== name).length;
+      if (fromOthers) setUnreadChat((u) => u + fromOthers);
     }
-    setEditingName(false);
-  };
+    lastChatLen.current = chat.length;
+  }, [chat, rightTab, name]);
 
-  const isHost = mode === "host" && hostUserId === youUserId;
-  const shouldRenderPlayer = mode === "synced" || isHost;
+  // Prune selected IDs when queue changes
+  useEffect(() => {
+    setSelectedIds((prev) => {
+      if (prev.size === 0) return prev;
+      const valid = new Set(queue.map((t) => t.id));
+      const next = new Set<string>();
+      prev.forEach((id) => valid.has(id) && next.add(id));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [queue]);
 
-  const sendWithPosition = useCallback((event: string, extra: Record<string, unknown> = {}) => {
-    const positionSec = playerRef.current?.getCurrentTime() ?? undefined;
-    socketRef.current?.emit(event, positionSec !== undefined ? { ...extra, positionSec } : extra);
-  }, []);
-
+  // ── Handlers ──
   const handleAddVideoId = useCallback((videoId: string) => {
     socketRef.current?.emit("add_track", { url: `https://youtu.be/${videoId}` });
   }, []);
-
   const handleAddPlaylist = useCallback((playlistId: string) => {
     socketRef.current?.emit("add_playlist", { playlistId });
   }, []);
+  const handleSearch = useCallback(
+    (query: string, cb: (resp: { results: SearchResult[]; error?: string }) => void) => {
+      const sock = socketRef.current;
+      if (!sock) return cb({ results: [], error: "not connected" });
+      sock.emit("search", { query }, cb);
+    },
+    []
+  );
+  const handleFetchAudioUrl = useCallback(
+    (videoId: string, refresh: boolean, cb: (resp: { url?: string; error?: string }) => void) => {
+      const sock = socketRef.current;
+      if (!sock) return cb({ error: "not connected" });
+      sock.emit("get_audio_url", { videoId, refresh }, cb);
+    },
+    []
+  );
+  const handleFetchLyrics = useCallback(
+    (videoId: string, cb: (resp: { lyrics: { synced: string | null; plain: string | null; title?: string | null; artist?: string | null } | null }) => void) => {
+      const sock = socketRef.current;
+      if (!sock) return cb({ lyrics: null });
+      sock.emit("get_lyrics", { videoId }, cb);
+    },
+    []
+  );
 
+  // For LyricsPanel: prefer the local audio's currentTime if rendered, else extrapolate from server playback
+  const playbackRef = useRef(playback);
+  useEffect(() => { playbackRef.current = playback; }, [playback]);
+  const getLyricsCurrentTime = useCallback(() => {
+    const local = playerRef.current?.getCurrentTime();
+    if (typeof local === "number" && local > 0) return local;
+    const p = playbackRef.current;
+    return p.playing
+      ? p.positionSec + (Date.now() - p.serverUpdatedAt) / 1000
+      : p.positionSec;
+  }, []);
   const trackStatus = useCallback(
     (videoId: string): TrackStatus => {
       if (current?.videoId === videoId) return "playing";
@@ -256,30 +391,6 @@ export default function RoomClient({
       return null;
     },
     [current, queue]
-  );
-
-  const handleSearch = useCallback(
-    (query: string, cb: (resp: { results: SearchResult[]; error?: string }) => void) => {
-      const sock = socketRef.current;
-      if (!sock) {
-        cb({ results: [], error: "not connected" });
-        return;
-      }
-      sock.emit("search", { query }, cb);
-    },
-    []
-  );
-
-  const handleFetchAudioUrl = useCallback(
-    (videoId: string, refresh: boolean, cb: (resp: { url?: string; error?: string }) => void) => {
-      const sock = socketRef.current;
-      if (!sock) {
-        cb({ error: "not connected" });
-        return;
-      }
-      sock.emit("get_audio_url", { videoId, refresh }, cb);
-    },
-    []
   );
 
   const handleJoin = useCallback(() => {
@@ -293,76 +404,63 @@ export default function RoomClient({
     setJoined(true);
   }, [nameInput, pickedPokemonId]);
 
-  const handleCopyLink = useCallback(() => {
-    if (typeof window === "undefined") return;
-    navigator.clipboard.writeText(window.location.href);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
-  }, []);
-
   const handleTrackEnded = useCallback(() => {
     if (!current) return;
     socketRef.current?.emit("track_ended", { trackId: current.id });
   }, [current]);
 
+  const sendWithPosition = useCallback((event: string, extra: Record<string, unknown> = {}) => {
+    const positionSec = playerRef.current?.getCurrentTime() ?? undefined;
+    socketRef.current?.emit(event, positionSec !== undefined ? { ...extra, positionSec } : extra);
+  }, []);
+
   const togglePlay = () => {
     if (playback.playing) sendWithPosition("pause");
     else sendWithPosition("play");
   };
-
   const skip = () => socketRef.current?.emit("skip");
-
-  const removeTrack = (trackId: string) => {
-    socketRef.current?.emit("remove_track", { trackId });
-  };
-
-  // Prune selectedIds when queue changes (e.g., a track was removed by someone else)
-  useEffect(() => {
-    setSelectedIds((prev) => {
-      if (prev.size === 0) return prev;
-      const valid = new Set(queue.map((t) => t.id));
-      let changed = false;
-      const next = new Set<string>();
-      prev.forEach((id) => {
-        if (valid.has(id)) next.add(id);
-        else changed = true;
-      });
-      return changed ? next : prev;
-    });
-  }, [queue]);
+  const seek = (sec: number) =>
+    socketRef.current?.emit("seek", { positionSec: sec });
+  const removeTrack = (id: string) =>
+    socketRef.current?.emit("remove_track", { trackId: id });
 
   const toggleSelected = (id: string) => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      next.has(id) ? next.delete(id) : next.add(id);
       return next;
     });
   };
-
   const allSelected = queue.length > 0 && selectedIds.size === queue.length;
   const toggleSelectAll = () => {
     if (allSelected) setSelectedIds(new Set());
     else setSelectedIds(new Set(queue.map((t) => t.id)));
   };
-
   const deleteSelected = () => {
     if (selectedIds.size === 0) return;
     socketRef.current?.emit("remove_tracks", { trackIds: Array.from(selectedIds) });
     setSelectMode(false);
     setSelectedIds(new Set());
   };
-
   const exitSelectMode = () => {
     setSelectMode(false);
     setSelectedIds(new Set());
+  };
+  const clearAll = () => {
+    if (queue.length === 0) return;
+    if (!confirmingClear) {
+      setConfirmingClear(true);
+      setTimeout(() => setConfirmingClear(false), 3000);
+      return;
+    }
+    socketRef.current?.emit("remove_tracks", { trackIds: queue.map((t) => t.id) });
+    setConfirmingClear(false);
   };
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   );
-
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
     if (!over || active.id === over.id) return;
@@ -374,266 +472,390 @@ export default function RoomClient({
     socketRef.current?.emit("reorder", { trackIds: newQueue.map((t) => t.id) });
   };
 
-  const setRoomMode = (m: Mode) => {
-    socketRef.current?.emit("set_mode", { mode: m });
+  const submitRename = () => {
+    const trimmed = nameDraft.trim().slice(0, 60);
+    if (trimmed && trimmed !== roomName) {
+      socketRef.current?.emit("set_room_name", { name: trimmed });
+    }
+    setEditingName(false);
   };
 
+  const setRoomMode = (m: Mode) => socketRef.current?.emit("set_mode", { mode: m });
   const claimHost = () => socketRef.current?.emit("claim_host");
 
-  // Name gate
+  // ── Join screen ──
   if (!joined) {
     return (
-      <main className="min-h-screen flex items-center justify-center p-6">
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            handleJoin();
-          }}
-          className="max-w-md w-full space-y-4 bg-zinc-900 p-6 rounded-xl border border-zinc-800"
-        >
-          <div className="flex items-center gap-3">
-            <Avatar pokemonId={pickedPokemonId} size={48} />
-            <div className="flex-1 min-w-0">
-              <h1 className="text-2xl font-bold">Joining room</h1>
-              <p className="text-gray-400 text-sm">
-                Room code: <span className="font-mono">{roomId}</span>
-              </p>
+      <div className="page">
+        <div className="onb">
+          <div className="onb-card">
+            <div className="onb-eyebrow">
+              <span className="live-dot" />
+              {initialRoomName ? "You've been invited" : "Joining a room"}
+            </div>
+            <h1>{initialRoomName ? `Join "${initialRoomName}"` : "Pick how you'll show up"}</h1>
+            <p className="lead">
+              Pick a nickname and a Pokémon — that's how everyone in the room will see you.
+            </p>
+
+            <div className="onb-section">
+              <div className="onb-field-label">Nickname</div>
+              <input
+                className="onb-input"
+                autoFocus
+                maxLength={32}
+                placeholder="e.g. midnight_dj"
+                value={nameInput}
+                onChange={(e) => setNameInput(e.target.value)}
+              />
+            </div>
+
+            <div className="onb-section">
+              <PokemonPicker
+                selectedId={pickedPokemonId}
+                onSelect={(id) => {
+                  setPickedPokemonId(id);
+                  setPickError(null);
+                }}
+                takenIds={takenIds}
+              />
+            </div>
+
+            {pickError && (
+              <div style={{ color: "var(--yellow)", fontSize: 12, marginBottom: 8 }}>{pickError}</div>
+            )}
+
+            {(nameInput.trim() || pickedPokemonId) && (
+              <div className="onb-preview">
+                <Avatar pokemonId={pickedPokemonId} size={56} />
+                <div>
+                  <div className="label">You'll appear as</div>
+                  <div className="name">{nameInput.trim() || "pick a nickname"}</div>
+                  <div className="sub">in room: {initialRoomName || roomId}</div>
+                </div>
+              </div>
+            )}
+
+            <button
+              type="button"
+              className="onb-cta"
+              disabled={
+                !nameInput.trim() ||
+                !pickedPokemonId ||
+                takenIds.includes(pickedPokemonId)
+              }
+              onClick={handleJoin}
+            >
+              Enter the radio {HeadphonesSmall}
+            </button>
+            <div className="onb-footer-note">
+              By joining, you agree to keep the vibe immaculate.
             </div>
           </div>
-          <div>
-            <label className="block text-sm text-gray-300 mb-1">Your name</label>
-            <input
-              autoFocus
-              value={nameInput}
-              onChange={(e) => setNameInput(e.target.value)}
-              maxLength={32}
-              placeholder="e.g. Rix"
-              className="w-full bg-zinc-800 border border-zinc-700 rounded-md px-3 py-2 outline-none focus:border-indigo-400"
-            />
-          </div>
-          <div>
-            <label className="block text-sm text-gray-300 mb-1">Pick your Pokémon avatar</label>
-            <PokemonPicker
-              selectedId={pickedPokemonId}
-              onSelect={(id) => {
-                setPickedPokemonId(id);
-                setPickError(null);
-              }}
-              takenIds={takenIds}
-            />
-          </div>
-          {pickError && <div className="text-xs text-amber-400">{pickError}</div>}
-          <button
-            type="submit"
-            disabled={!nameInput.trim() || !pickedPokemonId || takenIds.includes(pickedPokemonId)}
-            className="w-full bg-indigo-500 hover:bg-indigo-400 disabled:opacity-50 disabled:cursor-not-allowed font-semibold py-2 rounded-md"
-          >
-            Join
-          </button>
-        </form>
-      </main>
+        </div>
+      </div>
     );
   }
 
-  const hostName = users.find((u) => u.id === hostUserId)?.name;
+  // ── Room ──
+  const me = users.find((u) => u.id === youUserId);
+  const upcomingCount = queue.length;
 
   return (
-    <main className="min-h-screen p-4 md:p-6 max-w-6xl mx-auto">
-      <header className="flex flex-wrap items-center justify-between gap-3 mb-6">
-        <div className="min-w-0">
+    <div className="app">
+      {/* LEFT: users sidebar */}
+      <aside className="sidebar">
+        <div className="sidebar-header">
+          <h2>
+            <span className="live-dot" />
+            {connected ? "Live" : "Connecting…"}
+          </h2>
+          <a href="/">← lobby</a>
+        </div>
+
+        <div className="section-label">
+          <span>Listening</span>
+          <span className="count">{users.length}</span>
+        </div>
+        <ul className="user-list scroll">
+          {users.map((u) => {
+            const isHost = u.id === hostUserId && mode === "host";
+            return (
+              <li key={u.id} className={`user-row ${u.id === youUserId ? "me" : ""}`}>
+                <div style={{ position: "relative", display: "inline-flex", flexShrink: 0 }}>
+                  <Avatar pokemonId={u.pokemonId} size={32} />
+                  <span className={`avatar-status ${isHost ? "host" : ""}`} />
+                </div>
+                <div className="user-meta">
+                  <div className="name">
+                    {u.name}
+                    {isHost && <span className="badge" title="Host">{CrownIcon}</span>}
+                  </div>
+                  <div className="role">
+                    {HeadphonesSmall}
+                    <span style={{ marginLeft: 4 }}>
+                      {u.id === youUserId ? "you" : isHost ? "host · jamming" : "listening"}
+                    </span>
+                  </div>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+
+        <div className="you-bar">
+          <Avatar pokemonId={me?.pokemonId ?? null} size={28} />
+          <div className="user-meta">
+            <div className="name">{me?.name || name}</div>
+            <div className="role">Online</div>
+          </div>
+          <button
+            type="button"
+            className="icon-btn"
+            title="Settings"
+            aria-label="Settings"
+            disabled
+            style={{ opacity: 0.4, cursor: "default" }}
+          >
+            {SettingsIcon}
+          </button>
+        </div>
+      </aside>
+
+      {/* CENTER: main */}
+      <main className="main">
+        <div className="topbar">
           {editingName ? (
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                submitRename();
+            <input
+              className="channel-input"
+              autoFocus
+              value={nameDraft}
+              onChange={(e) => setNameDraft(e.target.value)}
+              maxLength={60}
+              onBlur={submitRename}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") submitRename();
+                if (e.key === "Escape") setEditingName(false);
               }}
-              className="flex items-center gap-2"
-            >
-              <input
-                autoFocus
-                value={nameDraft}
-                onChange={(e) => setNameDraft(e.target.value)}
-                maxLength={60}
-                onBlur={submitRename}
-                className="bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-2xl font-bold outline-none focus:border-indigo-400 min-w-0"
-              />
-            </form>
+            />
           ) : (
             <button
+              className="channel"
               onClick={() => {
                 setNameDraft(roomName);
                 setEditingName(true);
               }}
-              className="text-2xl font-bold tracking-tight text-left hover:text-indigo-300 transition"
               title="Click to rename"
             >
-              {roomName || `Room ${roomId}`}
+              <span className="channel-hash">{HashIcon}</span>
+              <span className="channel-name">{roomName || roomId}</span>
             </button>
           )}
-          <p className="text-xs text-gray-500 font-mono">
-            <a href="/" className="hover:text-gray-300">← lobby</a>
-            {" · "}
-            code: {roomId}
-            {" "}
-            {connected ? "· live" : "· connecting..."}
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-1 flex gap-1 text-sm">
+          <div className="divider" />
+          <div className="topic">
+            {mode === "host"
+              ? hostUserId === youUserId
+                ? "You're hosting — audio plays on your device."
+                : `Host: ${users.find((u) => u.id === hostUserId)?.name || "—"} (audio plays on their device)`
+              : "Same song, same time — synced for everyone."}
+          </div>
+          <div className="spacer" />
+          <div className="mode-toggle" role="group" aria-label="Playback mode">
             <button
-              onClick={() => setRoomMode("synced")}
-              className={`px-3 py-1 rounded ${mode === "synced" ? "bg-indigo-500 text-white" : "text-gray-400 hover:text-white"}`}
+              type="button"
+              className={mode === "synced" ? "active" : ""}
+              onClick={() => mode !== "synced" && setRoomMode("synced")}
+              title="Synced — every device plays the song in sync"
             >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 18v-6a9 9 0 0 1 18 0v6" />
+                <path d="M21 19a2 2 0 0 1-2 2h-1v-7h3zM3 19a2 2 0 0 0 2 2h1v-7H3z" />
+              </svg>
               Synced
             </button>
             <button
-              onClick={() => setRoomMode("host")}
-              className={`px-3 py-1 rounded ${mode === "host" ? "bg-indigo-500 text-white" : "text-gray-400 hover:text-white"}`}
+              type="button"
+              className={mode === "host" ? "active" : ""}
+              onClick={() => mode !== "host" && setRoomMode("host")}
+              title="Host — only the host's device plays audio (e.g. for a Bluetooth speaker in the room)"
             >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+                <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07" />
+              </svg>
               Host
             </button>
           </div>
-          <button
-            onClick={handleCopyLink}
-            className="bg-zinc-900 border border-zinc-800 hover:border-zinc-700 px-3 py-2 rounded-lg text-sm"
-          >
-            {copied ? "Copied!" : "Copy link"}
+          <button className="search-trigger" onClick={() => setSearchOpen(true)}>
+            {SearchIcon}
+            <span>Search a song or paste a link</span>
+            <kbd>⌘K</kbd>
           </button>
+          <ShareButton
+            inviteUrl={typeof window !== "undefined" ? window.location.origin + `/r/${roomId}` : `/r/${roomId}`}
+            listenerCount={users.length}
+          />
         </div>
-      </header>
 
-      {mode === "host" && (
-        <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-3 mb-4 text-sm flex items-center justify-between gap-3 flex-wrap">
-          <span className="text-gray-300">
-            {isHost
-              ? "You're the host — audio plays on your device. Plug into your bluetooth speaker."
-              : `Host: ${hostName || "—"} — only their device plays audio.`}
-          </span>
-          {!isHost && (
-            <button onClick={claimHost} className="bg-indigo-500 hover:bg-indigo-400 px-3 py-1 rounded text-white">
-              Make me host
-            </button>
+        <div className="main-body">
+          {mode === "host" && hostUserId !== youUserId && (
+            <div
+              style={{
+                background: "var(--bg-secondary)",
+                border: "1px solid var(--border)",
+                borderRadius: "var(--radius-md)",
+                padding: "10px 14px",
+                fontSize: 13,
+                color: "var(--text-secondary)",
+                display: "flex",
+                alignItems: "center",
+                gap: 12,
+                flexShrink: 0,
+              }}
+            >
+              <span style={{ flex: 1 }}>
+                Audio's playing on{" "}
+                <strong style={{ color: "var(--text-primary)" }}>
+                  {users.find((u) => u.id === hostUserId)?.name || "—"}
+                </strong>
+                's device. Want the speaker?
+              </span>
+              <button
+                type="button"
+                onClick={claimHost}
+                style={{
+                  background: "var(--brand)",
+                  color: "white",
+                  border: 0,
+                  padding: "6px 12px",
+                  borderRadius: 6,
+                  fontSize: 12,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                }}
+              >
+                Make me host
+              </button>
+            </div>
           )}
-        </div>
-      )}
 
-      <div className="grid md:grid-cols-3 gap-6">
-        <section className="md:col-span-2 space-y-4">
-          <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4">
-            <div className="text-xs uppercase tracking-wider text-gray-500 mb-2">Now playing</div>
-            {current ? (
-              <div className="flex items-center gap-3">
-                <img src={current.thumbnail} alt="" className="w-20 h-12 object-cover rounded" />
-                <div className="min-w-0 flex-1">
-                  <div className="font-medium truncate">{current.title}</div>
-                  <div className="text-xs text-gray-500 flex items-center gap-1">
-                    <span>added by</span>
-                    <Avatar pokemonId={current.addedByPokemonId} size={18} />
-                    <span>{current.addedByName}</span>
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <div className="text-gray-500 text-sm">Nothing playing — search or paste a YouTube link below.</div>
-            )}
-          </div>
-
-          {shouldRenderPlayer && (
+          {(mode === "synced" || hostUserId === youUserId) && (
             <AudioPlayer
               ref={playerRef}
-              videoId={current?.videoId || null}
+              track={
+                current
+                  ? {
+                      videoId: current.videoId,
+                      title: current.title,
+                      thumbnail: current.thumbnail,
+                      addedByName: current.addedByName,
+                      addedByPokemonId: current.addedByPokemonId,
+                    }
+                  : null
+              }
               playing={playback.playing}
               positionSec={playback.positionSec}
               serverUpdatedAt={playback.serverUpdatedAt}
+              shuffle={shuffle}
+              repeat={repeat}
+              hasNext={queue.length > 0 || repeat !== "off"}
+              onTogglePlay={togglePlay}
+              onSkip={skip}
+              onSeek={seek}
+              onToggleShuffle={() =>
+                socketRef.current?.emit("set_shuffle", { shuffle: !shuffle })
+              }
+              onCycleRepeat={() => {
+                const next: RepeatMode = repeat === "off" ? "all" : repeat === "all" ? "one" : "off";
+                socketRef.current?.emit("set_repeat", { repeat: next });
+              }}
               onEnded={handleTrackEnded}
-              onSeek={(sec) => socketRef.current?.emit("seek", { positionSec: sec })}
               fetchAudioUrl={handleFetchAudioUrl}
             />
           )}
 
-          {current && (
-            <div className="flex items-center gap-2">
-              <button
-                onClick={togglePlay}
-                className="bg-indigo-500 hover:bg-indigo-400 px-4 py-2 rounded-lg font-semibold"
-              >
-                {playback.playing ? "Pause" : "Play"}
-              </button>
-              <button
-                onClick={skip}
-                className="bg-zinc-800 hover:bg-zinc-700 px-4 py-2 rounded-lg"
-                disabled={!current && queue.length === 0}
-              >
-                Skip
-              </button>
+          {mode === "host" && hostUserId !== youUserId && current && (
+            <div
+              className="now-playing"
+              style={{
+                ["--np-grad-1" as string]: "#5865f2",
+                ["--np-grad-2" as string]: "#1e1f22",
+              } as React.CSSProperties}
+            >
+              <div className="np-cover">
+                <img src={current.thumbnail} alt="" />
+              </div>
+              <div className="np-info">
+                <div className="np-eyebrow">{HeadphonesSmall} Now playing</div>
+                <div className="np-title">{current.title}</div>
+                <div className="np-added-by">
+                  <Avatar pokemonId={current.addedByPokemonId} size={18} />
+                  added by <strong style={{ fontWeight: 600 }}>{current.addedByName}</strong>
+                </div>
+                <div style={{ marginTop: 8, fontSize: 13, opacity: 0.85 }}>
+                  Audio is playing on the host's device.
+                </div>
+              </div>
             </div>
           )}
 
-          <SearchBar
-            onAdd={handleAddVideoId}
-            onAddPlaylist={handleAddPlaylist}
-            search={handleSearch}
-            getStatus={trackStatus}
-          />
-          {error && <div className="text-sm text-red-400">{error}</div>}
+          {error && <div style={{ color: "var(--red)", fontSize: 13 }}>{error}</div>}
 
-          <div className="bg-zinc-900 border border-zinc-800 rounded-xl">
-            <div className="px-4 py-2 flex items-center justify-between gap-2 border-b border-zinc-800">
-              <div className="text-xs uppercase tracking-wider text-gray-500">
-                Queue ({queue.length})
+          <div className="queue">
+            <div className="queue-header">
+              <div className="queue-title">
+                {HashIcon} Up next
+                <span className="count">{upcomingCount}</span>
               </div>
-              <div className="flex items-center gap-2 text-xs">
-                {selectMode ? (
-                  <>
-                    <button
-                      onClick={toggleSelectAll}
-                      className="text-gray-400 hover:text-white px-2 py-1"
-                    >
-                      {allSelected ? "Deselect all" : "Select all"}
-                    </button>
-                    <button
-                      onClick={deleteSelected}
-                      disabled={selectedIds.size === 0}
-                      className="bg-red-500 hover:bg-red-400 disabled:opacity-50 disabled:cursor-not-allowed text-white px-2 py-1 rounded font-medium"
-                    >
-                      Delete {selectedIds.size}
-                    </button>
-                    <button
-                      onClick={exitSelectMode}
-                      className="text-gray-400 hover:text-white px-2 py-1"
-                    >
-                      Cancel
-                    </button>
-                  </>
-                ) : (
-                  queue.length > 0 && (
-                    <button
-                      onClick={() => setSelectMode(true)}
-                      className="text-gray-400 hover:text-white px-2 py-1"
-                    >
-                      Select
-                    </button>
-                  )
-                )}
-              </div>
-            </div>
-            <DndContext
-              sensors={sensors}
-              collisionDetection={closestCenter}
-              onDragEnd={handleDragEnd}
-            >
-              <SortableContext
-                items={queue.map((t) => t.id)}
-                strategy={verticalListSortingStrategy}
-              >
-                <ul>
-                  {queue.length === 0 && (
-                    <li className="px-4 py-6 text-sm text-gray-500">Queue is empty.</li>
+              <div className="spacer" />
+              {selectMode ? (
+                <>
+                  <button className="header-btn" onClick={toggleSelectAll}>
+                    {allSelected ? "Deselect all" : "Select all"}
+                  </button>
+                  <button
+                    className="header-btn danger"
+                    onClick={deleteSelected}
+                    disabled={selectedIds.size === 0}
+                    style={selectedIds.size === 0 ? { opacity: 0.5, cursor: "not-allowed" } : undefined}
+                  >
+                    Delete {selectedIds.size}
+                  </button>
+                  <button className="header-btn" onClick={exitSelectMode}>Cancel</button>
+                </>
+              ) : (
+                <>
+                  {queue.length > 0 && (
+                    <>
+                      <button className="header-btn" onClick={() => setSelectMode(true)}>
+                        Select
+                      </button>
+                      <button
+                        className={"header-btn " + (confirmingClear ? "danger" : "")}
+                        onClick={clearAll}
+                      >
+                        {confirmingClear ? "Click again to confirm" : "Clear"}
+                      </button>
+                    </>
                   )}
-                  {queue.map((t) => (
+                </>
+              )}
+            </div>
+
+            <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+              <SortableContext items={queue.map((t) => t.id)} strategy={verticalListSortingStrategy}>
+                <ul className="queue-list scroll">
+                  {queue.length === 0 && (
+                    <li className="queue-empty">
+                      Queue is empty. Open search (⌘K) and add the first track.
+                    </li>
+                  )}
+                  {queue.map((t, i) => (
                     <SortableQueueItem
                       key={t.id}
                       track={t}
+                      index={i}
+                      isUpNext={!shuffle && i === 0}
                       selectMode={selectMode}
                       isSelected={selectedIds.has(t.id)}
                       onToggleSelect={toggleSelected}
@@ -644,46 +866,61 @@ export default function RoomClient({
               </SortableContext>
             </DndContext>
           </div>
-        </section>
+        </div>
+      </main>
 
-        <aside className="space-y-4">
-          <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4">
-            <div className="text-xs uppercase tracking-wider text-gray-500 mb-2">
-              Listening ({users.length})
-            </div>
-            <ul className="space-y-2">
-              {users.map((u) => (
-                <li key={u.id} className="flex items-center gap-2 text-sm">
-                  <Avatar pokemonId={u.pokemonId} size={28} />
-                  <span className="truncate flex-1">{u.name}</span>
-                  {u.id === youUserId && <span className="text-xs text-gray-500">(you)</span>}
-                  {u.id === hostUserId && mode === "host" && (
-                    <span className="text-xs text-indigo-400">host</span>
-                  )}
-                </li>
-              ))}
-            </ul>
-          </div>
-          <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4">
-            <div className="text-xs uppercase tracking-wider text-gray-500 mb-3">
-              Chat
-            </div>
-            <ChatPanel
-              messages={chat}
-              roomId={roomId}
-              onSend={(text, imageUrl) =>
-                socketRef.current?.emit("send_chat", { text, imageUrl })
-              }
-            />
-          </div>
-          <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4">
-            <div className="text-xs uppercase tracking-wider text-gray-500 mb-3">
-              Activity
-            </div>
-            <ActivityFeed events={activity} />
-          </div>
-        </aside>
-      </div>
-    </main>
+      {/* RIGHT: tabs */}
+      <aside className="right">
+        <div className="right-tabs">
+          <button
+            className={`right-tab ${rightTab === "chat" ? "active" : ""}`}
+            onClick={() => setRightTab("chat")}
+          >
+            {ChatTabIcon} Chat
+            {unreadChat > 0 && rightTab !== "chat" && (
+              <span className="badge">{unreadChat}</span>
+            )}
+          </button>
+          <button
+            className={`right-tab ${rightTab === "history" ? "active" : ""}`}
+            onClick={() => setRightTab("history")}
+          >
+            {HistoryTabIcon} History
+          </button>
+          <button
+            className={`right-tab ${rightTab === "lyrics" ? "active" : ""}`}
+            onClick={() => setRightTab("lyrics")}
+          >
+            {LyricsTabIcon} Lyrics
+          </button>
+        </div>
+        {rightTab === "chat" ? (
+          <ChatPanel
+            messages={chat}
+            roomId={roomId}
+            onSend={(text, imageUrl) =>
+              socketRef.current?.emit("send_chat", { text, imageUrl })
+            }
+          />
+        ) : rightTab === "history" ? (
+          <HistoryPanel events={activity} />
+        ) : (
+          <LyricsPanel
+            videoId={current?.videoId || null}
+            getCurrentTime={getLyricsCurrentTime}
+            fetchLyrics={handleFetchLyrics}
+          />
+        )}
+      </aside>
+
+      <SearchOverlay
+        open={searchOpen}
+        onClose={() => setSearchOpen(false)}
+        onAdd={handleAddVideoId}
+        onAddPlaylist={handleAddPlaylist}
+        search={handleSearch}
+        getStatus={trackStatus}
+      />
+    </div>
   );
 }

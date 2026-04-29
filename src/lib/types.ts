@@ -1,4 +1,5 @@
 export type Mode = "synced" | "host";
+export type RepeatMode = "off" | "one" | "all";
 
 export interface Track {
   id: string;
@@ -56,11 +57,14 @@ export interface ActivityEvent {
 export interface RoomSnapshot {
   id: string;
   name: string;
+  placeId: string | null;
   mode: Mode;
   hostUserId: string | null;
   queue: Track[];
   current: Track | null;
   playback: Playback;
+  shuffle: boolean;
+  repeat: RepeatMode;
   users: User[];
   youUserId: string;
   activity: ActivityEvent[];
@@ -70,6 +74,7 @@ export interface RoomSnapshot {
 export interface RoomSummary {
   id: string;
   name: string;
+  placeId: string | null;
   listenerCount: number;
   currentTrack: { title: string; thumbnail: string } | null;
   avatars: number[];

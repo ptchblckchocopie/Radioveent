@@ -7,6 +7,8 @@ import Avatar from "./Avatar";
 
 type Props = {
   track: Track;
+  index: number;
+  isUpNext: boolean;
   selectMode: boolean;
   isSelected: boolean;
   onToggleSelect: (id: string) => void;
@@ -15,19 +17,27 @@ type Props = {
 
 function DragHandleIcon() {
   return (
-    <svg width="14" height="20" viewBox="0 0 14 20" fill="currentColor" aria-hidden="true">
-      <circle cx="4" cy="4" r="1.5" />
-      <circle cx="10" cy="4" r="1.5" />
-      <circle cx="4" cy="10" r="1.5" />
-      <circle cx="10" cy="10" r="1.5" />
-      <circle cx="4" cy="16" r="1.5" />
-      <circle cx="10" cy="16" r="1.5" />
+    <svg width="12" height="20" viewBox="0 0 14 20" fill="currentColor" aria-hidden="true">
+      <circle cx="4" cy="4" r="1.4" />
+      <circle cx="10" cy="4" r="1.4" />
+      <circle cx="4" cy="10" r="1.4" />
+      <circle cx="10" cy="10" r="1.4" />
+      <circle cx="4" cy="16" r="1.4" />
+      <circle cx="10" cy="16" r="1.4" />
     </svg>
   );
 }
 
+const RemoveIcon = (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M18 6 6 18M6 6l12 12" />
+  </svg>
+);
+
 export default function SortableQueueItem({
   track,
+  index,
+  isUpNext,
   selectMode,
   isSelected,
   onToggleSelect,
@@ -46,17 +56,17 @@ export default function SortableQueueItem({
     position: isDragging ? "relative" : undefined,
   };
 
-  const baseClasses =
-    "px-4 py-3 flex items-center gap-3 border-b border-zinc-800 last:border-b-0";
-  const modeClasses = selectMode
-    ? "cursor-pointer hover:bg-zinc-800/50 " + (isSelected ? "bg-indigo-500/10" : "")
-    : "bg-zinc-900";
+  const itemClass =
+    "queue-item" +
+    (isUpNext ? " up-next" : "") +
+    (selectMode ? " selecting" : "") +
+    (isSelected ? " selected" : "");
 
   return (
     <li
       ref={setNodeRef}
       style={style}
-      className={`${baseClasses} ${modeClasses}`}
+      className={itemClass}
       onClick={selectMode ? () => onToggleSelect(track.id) : undefined}
     >
       {selectMode ? (
@@ -65,41 +75,47 @@ export default function SortableQueueItem({
           checked={isSelected}
           onChange={() => onToggleSelect(track.id)}
           onClick={(e) => e.stopPropagation()}
-          className="w-4 h-4 accent-indigo-500 cursor-pointer flex-shrink-0"
+          style={{ width: 16, height: 16, accentColor: "var(--brand)", cursor: "pointer" }}
+          aria-label="Select track"
         />
       ) : (
         <button
           type="button"
           {...attributes}
           {...listeners}
-          className="text-gray-500 hover:text-gray-300 cursor-grab active:cursor-grabbing touch-none flex-shrink-0 p-1 -m-1"
+          className="drag-handle"
           aria-label="Drag to reorder"
           title="Drag to reorder"
         >
           <DragHandleIcon />
         </button>
       )}
-      <img
-        src={track.thumbnail}
-        alt=""
-        className="w-16 h-10 object-cover rounded flex-shrink-0"
-      />
-      <div className="flex-1 min-w-0">
-        <div className="truncate">{track.title}</div>
-        <div className="text-xs text-gray-500 flex items-center gap-1">
-          <span>added by</span>
-          <Avatar pokemonId={track.addedByPokemonId} size={16} />
-          <span>{track.addedByName}</span>
+
+      <img src={track.thumbnail} alt="" className="queue-cover" />
+
+      <div className="queue-info">
+        <div className="title">{track.title}</div>
+        <div className="sub">
+          <span className="added-by">
+            <Avatar pokemonId={track.addedByPokemonId} size={14} />
+            {track.addedByName}
+          </span>
         </div>
       </div>
+
+      <span /> {/* duration spacer */}
+
       {!selectMode && (
-        <button
-          onClick={() => onRemove(track.id)}
-          className="text-xs text-gray-500 hover:text-red-400 px-2 py-1 flex-shrink-0"
-          title="Remove"
-        >
-          Remove
-        </button>
+        <div className="queue-actions">
+          <button
+            className="danger"
+            onClick={() => onRemove(track.id)}
+            title="Remove"
+            aria-label="Remove from queue"
+          >
+            {RemoveIcon}
+          </button>
+        </div>
       )}
     </li>
   );

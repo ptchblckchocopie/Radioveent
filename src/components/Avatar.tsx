@@ -15,8 +15,13 @@ export default function Avatar({ pokemonId, size = 28, className = "" }: Props) 
   if (!pokemonId) {
     return (
       <div
-        className={`bg-zinc-700 rounded-full flex-shrink-0 ${className}`}
-        style={dim}
+        className={className}
+        style={{
+          ...dim,
+          background: "var(--bg-elevated)",
+          borderRadius: "50%",
+          flexShrink: 0,
+        }}
         aria-hidden="true"
       />
     );
@@ -25,8 +30,14 @@ export default function Avatar({ pokemonId, size = 28, className = "" }: Props) 
     <img
       src={spriteUrl(pokemonId)}
       alt=""
-      className={`flex-shrink-0 object-contain ${className}`}
-      style={{ ...dim, imageRendering: "pixelated" }}
+      className={className}
+      style={{
+        ...dim,
+        flexShrink: 0,
+        objectFit: "contain",
+        imageRendering: "pixelated",
+        display: "inline-block",
+      }}
       loading="lazy"
     />
   );

@@ -35,6 +35,60 @@ const YTDLP_PATH = process.env.YTDLP_PATH || path.join(os.homedir(), ".local/bin
 const audioUrlCache = new Map();
 const AUDIO_URL_TTL_MS = 5 * 60 * 60 * 1000; // 5 hours
 
+// videoId -> { lyrics: { synced, plain, title, artist } | null, expiresAt }
+const lyricsCache = new Map();
+const LYRICS_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+function cleanTitleForLyrics(title) {
+  if (!title) return "";
+  return title
+    // Strip parenthetical/bracketed YouTube cruft
+    .replace(/\((?:official|music|lyric|video|audio|hd|hq|4k|m\/v|mv|visualizer|live|cover|remix|extended|edit|version|reissue|remaster(?:ed)?)[^)]*\)/gi, "")
+    .replace(/\[(?:official|music|lyric|video|audio|hd|hq|4k|m\/v|mv|visualizer|live|cover|remix|extended|edit|version|reissue|remaster(?:ed)?)[^\]]*\]/gi, "")
+    .replace(/\bft\.?\s+[^,(\[]+/gi, "")
+    .replace(/\bfeat\.?\s+[^,(\[]+/gi, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+async function fetchLyrics(videoId) {
+  const cached = lyricsCache.get(videoId);
+  if (cached && cached.expiresAt > Date.now()) return cached.lyrics;
+
+  const meta = await fetchYouTubeMeta(videoId);
+  const cleaned = cleanTitleForLyrics(meta?.title || "");
+  if (!cleaned) {
+    lyricsCache.set(videoId, { lyrics: null, expiresAt: Date.now() + LYRICS_TTL_MS });
+    return null;
+  }
+
+  try {
+    const url = `https://lrclib.net/api/search?q=${encodeURIComponent(cleaned)}`;
+    const res = await fetch(url, {
+      headers: { "User-Agent": "VeentRadio/0.1 (https://github.com/ptchblckchocopie/Radioveent)" },
+    });
+    if (!res.ok) throw new Error("lrclib failed: " + res.status);
+    const data = await res.json();
+    if (!Array.isArray(data) || data.length === 0) {
+      lyricsCache.set(videoId, { lyrics: null, expiresAt: Date.now() + LYRICS_TTL_MS });
+      return null;
+    }
+    // Prefer a result with synced lyrics
+    const best = data.find((d) => d.syncedLyrics) || data.find((d) => d.plainLyrics) || data[0];
+    const lyrics = {
+      synced: best.syncedLyrics || null,
+      plain: best.plainLyrics || null,
+      title: best.trackName || null,
+      artist: best.artistName || null,
+    };
+    lyricsCache.set(videoId, { lyrics, expiresAt: Date.now() + LYRICS_TTL_MS });
+    return lyrics;
+  } catch (e) {
+    console.error("fetchLyrics failed for", videoId, e?.message || e);
+    return null;
+  }
+}
+
 async function extractAudioUrl(videoId) {
   const { stdout } = await execFileAsync(
     YTDLP_PATH,
@@ -134,17 +188,32 @@ async function fetchYouTubeMeta(videoId) {
   }
 }
 
+// Curated set of Pokémon-world place IDs (matches src/lib/places.ts)
+const VALID_PLACE_IDS = new Set([
+  "pallet-town", "viridian-forest", "cerulean-cape", "lavender-tower",
+  "cinnabar-volcano", "mt-moon", "goldenrod-skyline", "ecruteak",
+  "ilex-forest", "sootopolis", "route-113", "mt-pyre", "snowpoint",
+  "eterna-forest", "spear-pillar", "castelia", "dragonspiral",
+  "lumiose", "akala-beach", "lake-of-the-moone", "galar-route-2", "crown-tundra",
+]);
+function isValidPlaceId(v) {
+  return typeof v === "string" && VALID_PLACE_IDS.has(v);
+}
+
 function getOrCreateRoom(roomId) {
   if (!rooms.has(roomId)) {
     rooms.set(roomId, {
       id: roomId,
       name: "",
+      placeId: null,
       createdAt: Date.now(),
       mode: "synced",
       hostUserId: null,
       queue: [],
       current: null,
       playback: { playing: false, positionSec: 0, serverUpdatedAt: Date.now() },
+      shuffle: false,
+      repeat: "off",
       users: new Map(),
       activity: [],
       chat: [],
@@ -287,7 +356,10 @@ function snapshot(room, youUserId) {
   return {
     id: room.id,
     name: room.name || `Room ${room.id}`,
+    placeId: room.placeId || null,
     mode: room.mode,
+    shuffle: !!room.shuffle,
+    repeat: room.repeat || "off",
     hostUserId: room.hostUserId,
     queue: room.queue,
     current: room.current,
@@ -340,6 +412,7 @@ function getRoomSummaries() {
     list.push({
       id: room.id,
       name: room.name || `Room ${room.id}`,
+      placeId: room.placeId || null,
       listenerCount: room.users.size,
       currentTrack: room.current
         ? { title: room.current.title, thumbnail: room.current.thumbnail }
@@ -408,9 +481,33 @@ function setPlayback(room, { playing, positionSec }) {
   };
 }
 
-function advanceQueue(io, room) {
-  const next = room.queue.shift() || null;
-  room.current = next;
+function advanceQueue(io, room, opts = {}) {
+  const isNaturalEnd = !!opts.isNaturalEnd;
+
+  // Repeat-one: only on natural end of track. Skip bypasses it.
+  if (isNaturalEnd && room.repeat === "one" && room.current) {
+    setPlayback(room, { playing: true, positionSec: 0 });
+    broadcastPlayback(io, room);
+    return;
+  }
+
+  // Repeat-all: push the current track to the end of the queue before advancing
+  if (room.repeat === "all" && room.current) {
+    room.queue.push(room.current);
+  }
+
+  // Pick next: shuffled or sequential
+  let next = null;
+  if (room.queue.length > 0) {
+    if (room.shuffle) {
+      const i = Math.floor(Math.random() * room.queue.length);
+      next = room.queue.splice(i, 1)[0];
+    } else {
+      next = room.queue.shift();
+    }
+  }
+
+  room.current = next || null;
   setPlayback(room, { playing: !!next, positionSec: 0 });
   broadcastQueue(io, room);
   broadcastPlayback(io, room);
@@ -453,6 +550,18 @@ app.prepare().then(() => {
       if (room.name === trimmed) return;
       room.name = trimmed;
       io.to(room.id).emit("room_name_updated", { name: room.name });
+      scheduleLobbyBroadcast(io);
+    });
+
+    socket.on("set_room_place", ({ placeId }) => {
+      const ref = socketIndex.get(socket.id);
+      if (!ref) return;
+      const room = rooms.get(ref.roomId);
+      if (!room) return;
+      if (!isValidPlaceId(placeId)) return;
+      if (room.placeId === placeId) return;
+      room.placeId = placeId;
+      io.to(room.id).emit("room_place_updated", { placeId });
       scheduleLobbyBroadcast(io);
     });
 
@@ -538,6 +647,18 @@ app.prepare().then(() => {
       room.hostUserId = ref.userId;
       if (room.mode !== "host") room.mode = "host";
       broadcastMode(io, room);
+    });
+
+    socket.on("get_lyrics", async ({ videoId }, ack) => {
+      const respond = (p) => {
+        if (typeof ack === "function") ack(p);
+      };
+      if (!videoId || typeof videoId !== "string" || !/^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
+        respond({ lyrics: null });
+        return;
+      }
+      const lyrics = await fetchLyrics(videoId);
+      respond({ lyrics: lyrics || null });
     });
 
     socket.on("get_audio_url", async ({ videoId, refresh }, ack) => {
@@ -840,8 +961,33 @@ app.prepare().then(() => {
       const room = rooms.get(ref.roomId);
       if (!room) return;
       if (room.current && room.current.id === trackId) {
-        advanceQueue(io, room);
+        advanceQueue(io, room, { isNaturalEnd: true });
       }
+    });
+
+    socket.on("set_shuffle", ({ shuffle }) => {
+      const ref = socketIndex.get(socket.id);
+      if (!ref) return;
+      const room = rooms.get(ref.roomId);
+      if (!room) return;
+      room.shuffle = !!shuffle;
+      io.to(room.id).emit("playback_settings_updated", {
+        shuffle: room.shuffle,
+        repeat: room.repeat,
+      });
+    });
+
+    socket.on("set_repeat", ({ repeat }) => {
+      const ref = socketIndex.get(socket.id);
+      if (!ref) return;
+      const room = rooms.get(ref.roomId);
+      if (!room) return;
+      if (repeat !== "off" && repeat !== "one" && repeat !== "all") return;
+      room.repeat = repeat;
+      io.to(room.id).emit("playback_settings_updated", {
+        shuffle: room.shuffle,
+        repeat: room.repeat,
+      });
     });
 
     socket.on("disconnect", () => {
