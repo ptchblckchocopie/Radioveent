@@ -7,7 +7,22 @@ const { execFile } = require("child_process");
 const { promisify } = require("util");
 const { Server } = require("socket.io");
 const { nanoid } = require("nanoid");
-const YouTube = require("youtube-sr").default;
+const ytsrPkg = require("youtube-sr");
+const YouTube = ytsrPkg.default;
+// youtube-sr@4.3.12 throws inside parseVideo on result items whose shape it doesn't expect
+// (music shelves / topic-channel blocks YouTube includes for popular queries like "Dalangin",
+// "Bohemian", etc.). The caller in formatSearchResult skips items that return undefined, so
+// catching the throw turns "search failed" into "skip the bad item, keep the rest".
+if (ytsrPkg.Util && typeof ytsrPkg.Util.parseVideo === "function") {
+  const origParseVideo = ytsrPkg.Util.parseVideo.bind(ytsrPkg.Util);
+  ytsrPkg.Util.parseVideo = function safeParseVideo(data) {
+    try {
+      return origParseVideo(data);
+    } catch {
+      return undefined;
+    }
+  };
+}
 const Busboy = require("busboy");
 
 const UPLOAD_DIR = path.join(__dirname, "uploads");
@@ -38,55 +53,229 @@ const AUDIO_URL_TTL_MS = 5 * 60 * 60 * 1000; // 5 hours
 // videoId -> { lyrics: { synced, plain, title, artist } | null, expiresAt }
 const lyricsCache = new Map();
 const LYRICS_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const LYRICS_NEG_TTL_MS = 30 * 60 * 1000; // 30 min for "no match" so missing tracks can re-resolve sooner
 
+// videoId -> { durationSec, expiresAt }  (ms) — duration via youtube-sr, used for lrclib disambiguation
+const durationCache = new Map();
+const DURATION_TTL_MS = 60 * 60 * 1000; // 1 hour
+const DURATION_FETCH_TIMEOUT_MS = 5000;
+
+const LRCLIB_HEADERS = {
+  "User-Agent": "VeentRadio/0.1 (https://github.com/ptchblckchocopie/Radioveent)",
+};
+
+// Strip bracketed YouTube cruft like "(Official Video)" / "[Lyric Video]" / "(feat. X)".
+// Leaves bare "ft./feat. X" alone so it can be removed AFTER the artist/title split
+// (otherwise titles like "Drake feat. Future - Used To This" get mangled).
 function cleanTitleForLyrics(title) {
   if (!title) return "";
+  const KW = "official|music|lyric|video|audio|hd|hq|4k|m\\/v|mv|visualizer|live|cover|remix|extended|edit|version|reissue|remaster(?:ed)?|feat|ft|with";
   return title
-    // Strip parenthetical/bracketed YouTube cruft
-    .replace(/\((?:official|music|lyric|video|audio|hd|hq|4k|m\/v|mv|visualizer|live|cover|remix|extended|edit|version|reissue|remaster(?:ed)?)[^)]*\)/gi, "")
-    .replace(/\[(?:official|music|lyric|video|audio|hd|hq|4k|m\/v|mv|visualizer|live|cover|remix|extended|edit|version|reissue|remaster(?:ed)?)[^\]]*\]/gi, "")
-    .replace(/\bft\.?\s+[^,(\[]+/gi, "")
-    .replace(/\bfeat\.?\s+[^,(\[]+/gi, "")
+    .replace(new RegExp(`\\((?:${KW})[^)]*\\)`, "gi"), "")
+    .replace(new RegExp(`\\[(?:${KW})[^\\]]*\\]`, "gi"), "")
     .replace(/\s{2,}/g, " ")
     .trim();
 }
 
-async function fetchLyrics(videoId) {
-  const cached = lyricsCache.get(videoId);
-  if (cached && cached.expiresAt > Date.now()) return cached.lyrics;
+// Strip trailing bare "ft./feat./featuring/with X[, Y]" from the end of a string.
+// Safe to run on either side of an artist-title split.
+function stripBareFeatures(s) {
+  if (!s) return s;
+  return s
+    .replace(/\s*[-–—]?\s*\b(?:ft|feat|featuring|w\/|with)\.?\s+.+$/i, "")
+    .trim();
+}
+
+// Pull "Artist" out of a YouTube channel name. Strips Topic / VEVO / Official / Records suffixes.
+function normalizeChannelAsArtist(channel) {
+  if (!channel || typeof channel !== "string") return null;
+  let c = channel
+    .replace(/\s*[-–—]\s*Topic\s*$/i, "")
+    .replace(/\s*VEVO\s*$/i, "")
+    .replace(/\s*Official(?:\s+(?:Music|Channel|Artist))?\s*$/i, "")
+    .replace(/\s*Records\s*$/i, "")
+    .trim();
+  return c || null;
+}
+
+// Heuristic split of a YouTube title into { artist, track }. Falls back to channel as artist.
+function splitTitleArtist(rawTitle, channel) {
+  const cleaned = cleanTitleForLyrics(rawTitle || "");
+  if (!cleaned) return { artist: null, track: "" };
+  // Try common artist/title separators, longest first.
+  const seps = [" – ", " — ", " - ", " | ", " : ", ": "];
+  for (const sep of seps) {
+    const idx = cleaned.indexOf(sep);
+    if (idx > 0 && idx < cleaned.length - sep.length) {
+      const left = stripBareFeatures(cleaned.slice(0, idx).trim());
+      const right = stripBareFeatures(cleaned.slice(idx + sep.length).trim());
+      if (left && right) return { artist: left, track: right };
+    }
+  }
+  // No separator: strip trailing features and fall back to channel name as artist.
+  return { artist: normalizeChannelAsArtist(channel), track: stripBareFeatures(cleaned) };
+}
+
+// Dice coefficient over character bigrams, case- and punctuation-insensitive.
+function similarity(a, b) {
+  if (!a || !b) return 0;
+  const norm = (s) => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+  const A = norm(a);
+  const B = norm(b);
+  if (!A || !B) return 0;
+  if (A === B) return 1;
+  if (A.length < 2 || B.length < 2) return A === B ? 1 : 0;
+  const bigrams = (s) => {
+    const out = new Map();
+    for (let i = 0; i < s.length - 1; i++) {
+      const g = s.slice(i, i + 2);
+      out.set(g, (out.get(g) || 0) + 1);
+    }
+    return out;
+  };
+  const ag = bigrams(A);
+  const bg = bigrams(B);
+  let inter = 0;
+  let total = 0;
+  for (const [g, n] of ag) {
+    inter += Math.min(n, bg.get(g) || 0);
+    total += n;
+  }
+  for (const n of bg.values()) total += n;
+  return total === 0 ? 0 : (2 * inter) / total;
+}
+
+function scoreLyricsCandidate(c, target) {
+  const titleSim = similarity(c.trackName, target.track);
+  // Neutral when we have no artist to compare — don't penalize candidates for our missing data.
+  const artistSim = target.artist ? similarity(c.artistName, target.artist) : 0.5;
+  let durScore = 0.5;
+  if (target.durationSec > 0 && Number.isFinite(c.duration) && c.duration > 0) {
+    const delta = Math.abs(c.duration - target.durationSec);
+    if (delta <= 2) durScore = 1;
+    else if (delta <= 5) durScore = 0.85;
+    else if (delta <= 15) durScore = 0.5;
+    else durScore = 0.1;
+  }
+  const syncedBonus = c.syncedLyrics ? 0.05 : 0;
+  return titleSim * 0.45 + artistSim * 0.25 + durScore * 0.3 + syncedBonus;
+}
+
+function withTimeout(promise, ms) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), ms)),
+  ]);
+}
+
+async function fetchTrackDurationSec(videoId) {
+  const cached = durationCache.get(videoId);
+  if (cached && cached.expiresAt > Date.now()) return cached.durationSec;
+  try {
+    const v = await withTimeout(
+      YouTube.getVideo(`https://www.youtube.com/watch?v=${videoId}`),
+      DURATION_FETCH_TIMEOUT_MS
+    );
+    const ms = Number(v?.duration);
+    const durationSec = Number.isFinite(ms) && ms > 0 ? Math.round(ms / 1000) : 0;
+    durationCache.set(videoId, { durationSec, expiresAt: Date.now() + DURATION_TTL_MS });
+    return durationSec;
+  } catch {
+    // Cache the failure briefly so we don't hammer on every lyrics request.
+    durationCache.set(videoId, { durationSec: 0, expiresAt: Date.now() + 5 * 60 * 1000 });
+    return 0;
+  }
+}
+
+async function fetchLyrics(videoId, force = false) {
+  if (!force) {
+    const cached = lyricsCache.get(videoId);
+    if (cached && cached.expiresAt > Date.now()) return cached.lyrics;
+  }
 
   const meta = await fetchYouTubeMeta(videoId);
-  const cleaned = cleanTitleForLyrics(meta?.title || "");
-  if (!cleaned) {
-    lyricsCache.set(videoId, { lyrics: null, expiresAt: Date.now() + LYRICS_TTL_MS });
+  if (!meta?.title) {
+    lyricsCache.set(videoId, { lyrics: null, expiresAt: Date.now() + LYRICS_NEG_TTL_MS });
     return null;
   }
 
-  try {
-    const url = `https://lrclib.net/api/search?q=${encodeURIComponent(cleaned)}`;
-    const res = await fetch(url, {
-      headers: { "User-Agent": "VeentRadio/0.1 (https://github.com/ptchblckchocopie/Radioveent)" },
-    });
-    if (!res.ok) throw new Error("lrclib failed: " + res.status);
-    const data = await res.json();
-    if (!Array.isArray(data) || data.length === 0) {
-      lyricsCache.set(videoId, { lyrics: null, expiresAt: Date.now() + LYRICS_TTL_MS });
-      return null;
+  const { artist, track } = splitTitleArtist(meta.title, meta.channel);
+  const durationSec = await fetchTrackDurationSec(videoId);
+  const target = { artist, track, durationSec };
+
+  let pick = null;
+
+  // Strategy 1: precise /api/get when we have artist + track + duration.
+  if (artist && track && durationSec > 0) {
+    try {
+      const url =
+        "https://lrclib.net/api/get?" +
+        new URLSearchParams({
+          artist_name: artist,
+          track_name: track,
+          duration: String(durationSec),
+        });
+      const res = await fetch(url, { headers: LRCLIB_HEADERS });
+      if (res.ok) pick = await res.json();
+    } catch (e) {
+      console.error("lrclib /api/get failed:", e?.message || e);
     }
-    // Prefer a result with synced lyrics
-    const best = data.find((d) => d.syncedLyrics) || data.find((d) => d.plainLyrics) || data[0];
-    const lyrics = {
-      synced: best.syncedLyrics || null,
-      plain: best.plainLyrics || null,
-      title: best.trackName || null,
-      artist: best.artistName || null,
-    };
-    lyricsCache.set(videoId, { lyrics, expiresAt: Date.now() + LYRICS_TTL_MS });
-    return lyrics;
-  } catch (e) {
-    console.error("fetchLyrics failed for", videoId, e?.message || e);
+  }
+
+  // Strategy 2: structured /api/search with track_name + artist_name, scored.
+  if (!pick && (artist || track)) {
+    try {
+      const params = new URLSearchParams();
+      if (track) params.set("track_name", track);
+      if (artist) params.set("artist_name", artist);
+      const res = await fetch(`https://lrclib.net/api/search?${params}`, { headers: LRCLIB_HEADERS });
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data) && data.length > 0) {
+          pick = data
+            .map((c) => ({ c, score: scoreLyricsCandidate(c, target) }))
+            .sort((a, b) => b.score - a.score)[0].c;
+        }
+      }
+    } catch (e) {
+      console.error("lrclib /api/search (structured) failed:", e?.message || e);
+    }
+  }
+
+  // Strategy 3: free-text fallback on the whole cleaned title, scored.
+  if (!pick) {
+    try {
+      const q = stripBareFeatures(cleanTitleForLyrics(meta.title));
+      const res = await fetch(
+        `https://lrclib.net/api/search?q=${encodeURIComponent(q)}`,
+        { headers: LRCLIB_HEADERS }
+      );
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data) && data.length > 0) {
+          pick = data
+            .map((c) => ({ c, score: scoreLyricsCandidate(c, target) }))
+            .sort((a, b) => b.score - a.score)[0].c;
+        }
+      }
+    } catch (e) {
+      console.error("lrclib /api/search (q) failed:", e?.message || e);
+    }
+  }
+
+  if (!pick) {
+    lyricsCache.set(videoId, { lyrics: null, expiresAt: Date.now() + LYRICS_NEG_TTL_MS });
     return null;
   }
+
+  const lyrics = {
+    synced: pick.syncedLyrics || null,
+    plain: pick.plainLyrics || null,
+    title: pick.trackName || null,
+    artist: pick.artistName || null,
+  };
+  lyricsCache.set(videoId, { lyrics, expiresAt: Date.now() + LYRICS_TTL_MS });
+  return lyrics;
 }
 
 async function extractAudioUrl(videoId) {
@@ -120,7 +309,10 @@ const rooms = new Map();
 // socketId -> { userId, roomId }
 const socketIndex = new Map();
 
-const ROOM_TTL_MS = 5 * 60 * 1000;
+// Keep empty rooms alive for half an hour so a user who briefly disconnects
+// (tab close, wifi switch, mobile suspend, server restart) can come back and find
+// their room still there — instead of "the radio randomly disappeared".
+const ROOM_TTL_MS = 30 * 60 * 1000;
 const cleanupTimers = new Map();
 
 function tryParseUrl(input) {
@@ -179,11 +371,13 @@ async function fetchYouTubeMeta(videoId) {
     return {
       title: data.title || "Unknown title",
       thumbnail: data.thumbnail_url || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+      channel: data.author_name || null,
     };
   } catch {
     return {
       title: "Unknown title",
       thumbnail: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+      channel: null,
     };
   }
 }
@@ -649,7 +843,7 @@ app.prepare().then(() => {
       broadcastMode(io, room);
     });
 
-    socket.on("get_lyrics", async ({ videoId }, ack) => {
+    socket.on("get_lyrics", async ({ videoId, refresh }, ack) => {
       const respond = (p) => {
         if (typeof ack === "function") ack(p);
       };
@@ -657,7 +851,7 @@ app.prepare().then(() => {
         respond({ lyrics: null });
         return;
       }
-      const lyrics = await fetchLyrics(videoId);
+      const lyrics = await fetchLyrics(videoId, !!refresh);
       respond({ lyrics: lyrics || null });
     });
 

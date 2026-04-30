@@ -132,7 +132,11 @@ function TheaterLyrics({
 }: {
   videoId: string;
   getCurrentTime: () => number;
-  fetchLyrics: (videoId: string, cb: (resp: { lyrics: { synced: string | null; plain: string | null } | null }) => void) => void;
+  fetchLyrics: (
+    videoId: string,
+    refresh: boolean,
+    cb: (resp: { lyrics: { synced: string | null; plain: string | null } | null }) => void
+  ) => void;
 }) {
   const [lyrics, setLyrics] = React.useState<{ synced: string | null; plain: string | null } | null>(null);
   const [activeIdx, setActiveIdx] = React.useState(-1);
@@ -142,7 +146,7 @@ function TheaterLyrics({
     if (!videoId) { setLyrics(null); return; }
     setLyrics(null);
     const myReq = ++reqIdRef.current;
-    fetchLyrics(videoId, (resp) => {
+    fetchLyrics(videoId, false, (resp) => {
       if (myReq !== reqIdRef.current) return;
       setLyrics(resp?.lyrics || null);
     });
@@ -188,15 +192,25 @@ function TheaterLyrics({
     return <div className="theater-lyrics-empty">No synced lyrics available</div>;
   }
 
-  const prev = activeIdx > 0 ? syncedLines[activeIdx - 1] : null;
-  const curr = activeIdx >= 0 ? syncedLines[activeIdx] : null;
-  const next = activeIdx + 1 < syncedLines.length ? syncedLines[activeIdx + 1] : null;
-
+  // Render the whole synced list. The stack slides via translateY so the active line
+  // sits at the body's vertical center; each line transitions its own size/opacity/blur
+  // based on data-offset. Stable React keys (line index) let CSS transitions actually fire
+  // — the previous "3 fixed slots" layout swapped text content in place, which CSS can't animate.
+  const idx = Math.max(0, activeIdx);
   return (
-    <div className="theater-lyrics-lines">
-      <div className="theater-line prev">{prev?.text || ""}</div>
-      <div className="theater-line current">{curr?.text || "♪"}</div>
-      <div className="theater-line next">{next?.text || ""}</div>
+    <div
+      className="theater-lyrics-stack"
+      style={{ ["--active" as string]: idx } as React.CSSProperties}
+    >
+      {syncedLines.map((line, i) => (
+        <div
+          key={i}
+          className="theater-stack-line"
+          data-offset={i - idx}
+        >
+          {line.text || "♪"}
+        </div>
+      ))}
     </div>
   );
 }
@@ -401,7 +415,11 @@ export default function RoomClient({
     else sock.once("connect", doPeek);
   }, [joined, roomId]);
 
-  // Send join when ready
+  // Send join — and RE-join automatically on every socket reconnect. socket.io auto-reconnects
+  // on network blips / tab backgrounding / server restarts; without rejoining, the server's
+  // socketIndex no longer has us, so every subsequent emit silently fails and we look like a
+  // ghost in our own room. Initial-join cruft (room name/place from URL) only runs once.
+  const initialJoinDoneRef = useRef(false);
   useEffect(() => {
     if (!joined || !name || !pokemonId) return;
     const sock = socketRef.current;
@@ -413,27 +431,46 @@ export default function RoomClient({
         (resp: { ok?: boolean; error?: string; takenPokemonIds?: number[] }) => {
           if (resp?.error === "pokemon_taken") {
             setTakenIds(resp.takenPokemonIds || []);
-            setJoined(false);
-            setPickError("Someone else just picked that Pokémon. Choose another.");
+            // On a true *initial* join collision, kick back to the picker.
+            // On a *reconnect* collision (someone grabbed our slot while we were briefly gone),
+            // pick a different free Pokémon and stay in the room rather than booting the user.
+            if (!initialJoinDoneRef.current) {
+              setJoined(false);
+              setPickError("Someone else just picked that Pokémon. Choose another.");
+              return;
+            }
+            const taken = new Set(resp.takenPokemonIds || []);
+            const available = POKEMON_LIST.filter((p) => !taken.has(p.id));
+            if (available.length > 0) {
+              const next = available[Math.floor(Math.random() * available.length)].id;
+              setPokemonId(next);
+              setStoredPokemonId(next);
+            }
             return;
           }
-          if (initialRoomName && initialRoomName.trim()) {
-            sock.emit("set_room_name", { name: initialRoomName.trim() });
-          }
-          if (initialPlaceId) {
-            sock.emit("set_room_place", { placeId: initialPlaceId });
-          }
-          if ((initialRoomName || initialPlaceId) && typeof window !== "undefined") {
-            const url = new URL(window.location.href);
-            url.searchParams.delete("name");
-            url.searchParams.delete("place");
-            window.history.replaceState(null, "", url.pathname + url.search);
+          if (!initialJoinDoneRef.current) {
+            initialJoinDoneRef.current = true;
+            if (initialRoomName && initialRoomName.trim()) {
+              sock.emit("set_room_name", { name: initialRoomName.trim() });
+            }
+            if (initialPlaceId) {
+              sock.emit("set_room_place", { placeId: initialPlaceId });
+            }
+            if ((initialRoomName || initialPlaceId) && typeof window !== "undefined") {
+              const url = new URL(window.location.href);
+              url.searchParams.delete("name");
+              url.searchParams.delete("place");
+              window.history.replaceState(null, "", url.pathname + url.search);
+            }
           }
         }
       );
     };
     if (sock.connected) doJoin();
-    else sock.once("connect", doJoin);
+    sock.on("connect", doJoin);
+    return () => {
+      sock.off("connect", doJoin);
+    };
   }, [joined, name, pokemonId, roomId, initialRoomName, initialPlaceId]);
 
   // ⌘K / Ctrl-K to open search
@@ -498,10 +535,14 @@ export default function RoomClient({
     []
   );
   const handleFetchLyrics = useCallback(
-    (videoId: string, cb: (resp: { lyrics: { synced: string | null; plain: string | null; title?: string | null; artist?: string | null } | null }) => void) => {
+    (
+      videoId: string,
+      refresh: boolean,
+      cb: (resp: { lyrics: { synced: string | null; plain: string | null; title?: string | null; artist?: string | null } | null }) => void
+    ) => {
       const sock = socketRef.current;
       if (!sock) return cb({ lyrics: null });
-      sock.emit("get_lyrics", { videoId }, cb);
+      sock.emit("get_lyrics", { videoId, refresh }, cb);
     },
     []
   );
@@ -694,97 +735,56 @@ export default function RoomClient({
   const me = users.find((u) => u.id === youUserId);
   const upcomingCount = queue.length;
 
-  // ── Theater mode (full-screen) ──
-  if (theaterMode && current) {
-    return (
-      <div className="theater">
-        {/* Hidden audio player */}
-        {(mode === "synced" || hostUserId === youUserId) && (
-          <div style={{ position: "absolute", width: 0, height: 0, overflow: "hidden" }}>
-            <AudioPlayer
-              ref={playerRef}
-              track={{
-                videoId: current.videoId,
-                title: current.title,
-                thumbnail: current.thumbnail,
-                addedByName: current.addedByName,
-                addedByPokemonId: current.addedByPokemonId,
-              }}
-              playing={playback.playing}
-              positionSec={playback.positionSec}
-              serverUpdatedAt={playback.serverUpdatedAt}
-              shuffle={shuffle}
-              repeat={repeat}
-              hasNext={queue.length > 0 || repeat !== "off"}
-              onTogglePlay={togglePlay}
-              onSkip={skip}
-              onSeek={seek}
-              onToggleShuffle={() => socketRef.current?.emit("set_shuffle", { shuffle: !shuffle })}
-              onCycleRepeat={() => {
-                const next: RepeatMode = repeat === "off" ? "all" : repeat === "all" ? "one" : "off";
-                socketRef.current?.emit("set_repeat", { repeat: next });
-              }}
-              onEnded={handleTrackEnded}
-              fetchAudioUrl={handleFetchAudioUrl}
-            />
-          </div>
-        )}
-
-        {/* Theater header */}
-        <div className="theater-header">
-          <span className="theater-label">
-            <span className="live-dot" />
-            Theater mode · everyone is here
-          </span>
-          <div className="theater-song-info">
-            <div className="theater-song-title">{current.title}</div>
-            <div className="theater-song-artist">
-              {current.addedByName ? `added by ${current.addedByName}` : ""}
-            </div>
-          </div>
-          <button
-            className="theater-exit-btn"
-            onClick={() => setTheaterMode(false)}
-          >
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7" />
-            </svg>
-            Exit theater
-          </button>
-        </div>
-
-        {/* Lyrics area */}
-        <div className="theater-lyrics-body">
-          <TheaterLyrics
-            videoId={current.videoId}
-            getCurrentTime={getLyricsCurrentTime}
-            fetchLyrics={handleFetchLyrics}
-          />
-        </div>
-
-        {/* Bottom controls */}
-        <TheaterControls
-          playing={playback.playing}
-          getCurrentTime={getLyricsCurrentTime}
-          duration={0}
-          onTogglePlay={togglePlay}
-          onSkip={skip}
-        />
-
-        <SearchOverlay
-          open={searchOpen}
-          onClose={() => setSearchOpen(false)}
-          onAdd={handleAddVideoId}
-          onAddPlaylist={handleAddPlaylist}
-          search={handleSearch}
-          getStatus={trackStatus}
-        />
-      </div>
-    );
-  }
+  // ── Theater mode renders as an OVERLAY on top of the regular .app tree below.
+  // The regular tree (and its <AudioPlayer>) stays mounted across toggles, so audio
+  // never re-buffers and lyrics stay glued to audio.currentTime.
+  const theaterActive = theaterMode && !!current;
 
   return (
-    <div className="app">
+    <>
+      {theaterActive && current && (
+        <div className="theater">
+          <div className="theater-header">
+            <span className="theater-label">
+              <span className="live-dot" />
+              Theater mode · everyone is here
+            </span>
+            <div className="theater-song-info">
+              <div className="theater-song-title">{current.title}</div>
+              <div className="theater-song-artist">
+                {current.addedByName ? `added by ${current.addedByName}` : ""}
+              </div>
+            </div>
+            <button
+              className="theater-exit-btn"
+              onClick={() => setTheaterMode(false)}
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7" />
+              </svg>
+              Exit theater
+            </button>
+          </div>
+
+          <div className="theater-lyrics-body">
+            <TheaterLyrics
+              videoId={current.videoId}
+              getCurrentTime={getLyricsCurrentTime}
+              fetchLyrics={handleFetchLyrics}
+            />
+          </div>
+
+          <TheaterControls
+            playing={playback.playing}
+            getCurrentTime={getLyricsCurrentTime}
+            duration={0}
+            onTogglePlay={togglePlay}
+            onSkip={skip}
+          />
+        </div>
+      )}
+
+    <div className="app" style={theaterActive ? { display: "none" } : undefined}>
       {/* LEFT: users sidebar */}
       <aside className="sidebar">
         <div className="sidebar-header">
@@ -1173,5 +1173,6 @@ export default function RoomClient({
         getStatus={trackStatus}
       />
     </div>
+    </>
   );
 }

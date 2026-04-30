@@ -11,7 +11,11 @@ type Lyrics = {
 type Props = {
   videoId: string | null;
   getCurrentTime: () => number;
-  fetchLyrics: (videoId: string, cb: (resp: { lyrics: Lyrics | null }) => void) => void;
+  fetchLyrics: (
+    videoId: string,
+    refresh: boolean,
+    cb: (resp: { lyrics: Lyrics | null }) => void
+  ) => void;
 };
 
 interface LyricsLine {
@@ -47,11 +51,20 @@ export default function LyricsPanel({ videoId, getCurrentTime, fetchLyrics }: Pr
   const [lyrics, setLyrics] = useState<Lyrics | null>(null);
   const [loading, setLoading] = useState(false);
   const [activeIdx, setActiveIdx] = useState(-1);
+  const [reloadKey, setReloadKey] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
   const activeLineRef = useRef<HTMLDivElement>(null);
   const reqIdRef = useRef(0);
+  // Consumed once on the next fetch so it only forces a single refresh, not all subsequent fetches.
+  const forceNextRef = useRef(false);
+  // Track is changing — reset the user-initiated refresh flag for the new track.
+  const lastVideoIdRef = useRef<string | null>(null);
 
   useEffect(() => {
+    if (lastVideoIdRef.current !== videoId) {
+      lastVideoIdRef.current = videoId;
+      forceNextRef.current = false;
+    }
     if (!videoId) {
       setLyrics(null);
       setLoading(false);
@@ -61,12 +74,19 @@ export default function LyricsPanel({ videoId, getCurrentTime, fetchLyrics }: Pr
     setLoading(true);
     setActiveIdx(-1);
     const myReqId = ++reqIdRef.current;
-    fetchLyrics(videoId, (resp) => {
+    const refresh = forceNextRef.current;
+    forceNextRef.current = false;
+    fetchLyrics(videoId, refresh, (resp) => {
       if (myReqId !== reqIdRef.current) return;
       setLoading(false);
       setLyrics(resp?.lyrics || null);
     });
-  }, [videoId, fetchLyrics]);
+  }, [videoId, fetchLyrics, reloadKey]);
+
+  const handleRetry = () => {
+    forceNextRef.current = true;
+    setReloadKey((k) => k + 1);
+  };
 
   const syncedLines = useMemo(
     () => (lyrics?.synced ? parseLRC(lyrics.synced) : null),
@@ -119,6 +139,9 @@ export default function LyricsPanel({ videoId, getCurrentTime, fetchLyrics }: Pr
         <div style={{ fontSize: 12, color: "var(--text-faint)", marginTop: 6 }}>
           via lrclib.net — only popular songs are indexed.
         </div>
+        <button type="button" className="lyrics-retry" onClick={handleRetry}>
+          Try again
+        </button>
       </div>
     );
   }
@@ -156,7 +179,15 @@ export default function LyricsPanel({ videoId, getCurrentTime, fetchLyrics }: Pr
         ) : null}
       </div>
       <div className="lyrics-attribution">
-        {syncedLines ? "Synced lyrics" : "Plain lyrics"} · lrclib.net
+        <span>{syncedLines ? "Synced lyrics" : "Plain lyrics"} · lrclib.net</span>
+        <button
+          type="button"
+          className="lyrics-retry-link"
+          onClick={handleRetry}
+          title="Re-match this track against lrclib"
+        >
+          Wrong song? Try again
+        </button>
       </div>
     </div>
   );
