@@ -5,6 +5,9 @@ const nextConfig = {
   turbopack: { root: path.resolve(__dirname) },
   allowedDevOrigins: [
     "*.trycloudflare.com",
+    "*.ngrok-free.dev",
+    "*.ngrok-free.app",
+    "*.ngrok.io",
     "radio.veent.ph",
     "192.168.*.*",
     "10.*.*.*",

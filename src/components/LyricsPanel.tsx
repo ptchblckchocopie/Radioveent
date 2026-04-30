@@ -6,6 +6,14 @@ type Lyrics = {
   plain: string | null;
   title?: string | null;
   artist?: string | null;
+  source?: string | null;
+};
+
+const SOURCE_LABEL: Record<string, string> = {
+  lrclib: "lrclib.net",
+  netease: "NetEase Music",
+  genius: "Genius",
+  "lyrics.ovh": "lyrics.ovh",
 };
 
 type Props = {
@@ -183,7 +191,10 @@ export default function LyricsPanel({ videoId, getCurrentTime, fetchLyrics, onSe
         <div className="lyrics-pad" />
       </div>
       <div className="lyrics-attribution">
-        <span>{syncedLines ? "Synced lyrics" : "Plain lyrics"} · lrclib.net</span>
+        <span>
+          {syncedLines ? "Synced lyrics" : "Plain lyrics"}
+          {lyrics.source ? ` · ${SOURCE_LABEL[lyrics.source] || lyrics.source}` : ""}
+        </span>
         <button
           type="button"
           className="lyrics-retry-link"

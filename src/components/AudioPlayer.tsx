@@ -187,14 +187,29 @@ const AudioPlayer = forwardRef<AudioPlayerHandle, Props>(function AudioPlayer(
 
   const videoId = track?.videoId || null;
 
+  // When we deliberately seek to 0 on a fresh track start (skip / repeat-one), the server's
+  // (positionSec=0, serverUpdatedAt=T0) is "stale" by however long the audio took to load.
+  // Anchoring locally to the moment we actually started playing keeps drift correction calm
+  // — otherwise applyState at +5s would compute target = 0 + load_gap and jump us forward
+  // by 1–2s, undoing the clean start. Falls back to server timestamp for any other case
+  // (mid-song joins, seeks, theater toggles).
+  const localAnchorRef = useRef<{ effectiveTs: number; positionSec: number; serverUpdatedAt: number } | null>(null);
+
+  function effectiveServerTs(pos: number, ts: number) {
+    const a = localAnchorRef.current;
+    if (a && a.positionSec === pos && a.serverUpdatedAt === ts) return a.effectiveTs;
+    return ts;
+  }
+
   function applyState() {
     const audio = audioRef.current;
     if (!audio || !audio.src) return;
     // Don't act until metadata is ready — otherwise we'd play from 0 while the
     // initial seek is still pending, causing the "starts from beginning then jumps" glitch.
     if (audio.readyState < 1 /* HAVE_METADATA */) return;
+    const ts = effectiveServerTs(positionSec, serverUpdatedAt);
     const target = playing
-      ? positionSec + (Date.now() - serverUpdatedAt) / 1000
+      ? positionSec + (Date.now() - ts) / 1000
       : positionSec;
     if (Number.isFinite(target) && Math.abs(audio.currentTime - target) > 0.6) {
       try { audio.currentTime = Math.max(0, target); } catch {}
@@ -222,13 +237,19 @@ const AudioPlayer = forwardRef<AudioPlayerHandle, Props>(function AudioPlayer(
       if (!audio) return;
       audio.src = resp.url;
 
-      // Seek to the correct server position (not 0) before play. This prevents
-      // a brief playback from the start when remounting mid-song (e.g. coming
-      // back from host mode). Wait for metadata so the seek is reliable.
+      // Seek to the correct server position before play. For a *fresh* start (skip / first
+      // play / repeat-one) the server reports positionSec≈0 — extrapolating by the audio-load
+      // gap would land us 1–2s in, which feels like the new song was "skipped ahead". Snap
+      // to 0 in that case and anchor locally so drift correction doesn't undo it. For
+      // mid-song mounts (theater toggles, host-mode swap) we still extrapolate to stay synced.
       const seekAndPlay = () => {
         const { playing: p, positionSec: pos, serverUpdatedAt: ts } = stateRef.current;
-        const startSec = p ? pos + (Date.now() - ts) / 1000 : pos;
+        const isFreshStart = pos < 0.5;
+        const startSec = (p && !isFreshStart) ? pos + (Date.now() - ts) / 1000 : pos;
         try { audio.currentTime = Math.max(0, startSec); } catch {}
+        if (isFreshStart && p) {
+          localAnchorRef.current = { effectiveTs: Date.now(), positionSec: pos, serverUpdatedAt: ts };
+        }
         if (p) audio.play().catch(() => setNeedsTap(true));
       };
       if (audio.readyState >= 1 /* HAVE_METADATA */) {
@@ -251,13 +272,21 @@ const AudioPlayer = forwardRef<AudioPlayerHandle, Props>(function AudioPlayer(
     setNeedsTap(false);
     setDuration(0);
     setDisplayPosition(0);
+    localAnchorRef.current = null;
     const audio = audioRef.current;
-    if (!videoId) {
-      if (audio) {
-        audio.pause();
+    // Stop the previous track *immediately*. Otherwise applyState (which will fire on the
+    // incoming positionSec=0 playback_update) sees the stale src still loaded, computes a
+    // huge drift, and seeks the OLD song to ~0 + plays it for the second or two it takes
+    // the new URL to fetch — that's the "first few seconds of the previous song" you hear
+    // right before the next track starts.
+    if (audio) {
+      audio.pause();
+      if (audio.src) {
         audio.removeAttribute("src");
         audio.load();
       }
+    }
+    if (!videoId) {
       setLoading(false);
       setError(null);
       return;
@@ -276,11 +305,19 @@ const AudioPlayer = forwardRef<AudioPlayerHandle, Props>(function AudioPlayer(
   // This is what makes repeat-one work past the first loop: server sets positionSec=0
   // for every loop, and we need to allow the next natural-end event to fire again.
   // Otherwise lastEndedFiredFor is stuck at the videoId and all subsequent ends are dropped.
+  // Same effect also re-anchors localAnchorRef so repeat-one loops don't suffer the same
+  // drift-correction-jumps-forward issue we already fixed for skip / fresh starts: in
+  // a repeat-one loop the videoId doesn't change (so seekAndPlay never fires), but the
+  // server still emits positionSec=0; without anchoring, applyState at +5s would compute
+  // target = 5 + load_gap and seek the audio forward by ~load_gap.
   useEffect(() => {
     if (positionSec < 0.5) {
       lastEndedFiredFor.current = null;
+      if (playing) {
+        localAnchorRef.current = { effectiveTs: Date.now(), positionSec, serverUpdatedAt };
+      }
     }
-  }, [positionSec, serverUpdatedAt]);
+  }, [positionSec, serverUpdatedAt, playing]);
 
   // Drift correction every 5s while playing
   useEffect(() => {

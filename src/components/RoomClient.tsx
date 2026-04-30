@@ -136,7 +136,7 @@ function TheaterLyrics({
   fetchLyrics: (
     videoId: string,
     refresh: boolean,
-    cb: (resp: { lyrics: { synced: string | null; plain: string | null } | null }) => void
+    cb: (resp: { lyrics: { synced: string | null; plain: string | null; title?: string | null; artist?: string | null; source?: string | null } | null }) => void
   ) => void;
 }) {
   const [lyrics, setLyrics] = React.useState<{ synced: string | null; plain: string | null } | null>(null);
@@ -231,7 +231,7 @@ function TheaterOverlay({
   users: User[];
   playback: Playback;
   getLyricsCurrentTime: () => number;
-  handleFetchLyrics: (videoId: string, refresh: boolean, cb: (resp: { lyrics: { synced: string | null; plain: string | null } | null }) => void) => void;
+  handleFetchLyrics: (videoId: string, refresh: boolean, cb: (resp: { lyrics: { synced: string | null; plain: string | null; title?: string | null; artist?: string | null; source?: string | null } | null }) => void) => void;
   togglePlay: () => void;
   skip: () => void;
   seek: (sec: number) => void;
@@ -412,6 +412,8 @@ export default function RoomClient({
   const [lyricsOpen, setLyricsOpen] = useState(false);
   const [theaterMode, setTheaterMode] = useState(false);
   const [mobilePanel, setMobilePanel] = useState<"main" | "users" | "chat" | "history">("main");
+  // Counter (not boolean) so re-clicking restarts the auto-hide timer.
+  const [settingsHintKey, setSettingsHintKey] = useState(0);
 
   const socketRef = useRef<Socket | null>(null);
   const playerRef = useRef<AudioPlayerHandle>(null);
@@ -541,22 +543,26 @@ export default function RoomClient({
         { roomId, name, pokemonId },
         (resp: { ok?: boolean; error?: string; takenPokemonIds?: number[] }) => {
           if (resp?.error === "pokemon_taken") {
+            // pokemon_taken on a rejoin is almost always a stale-entry race: socket.io's
+            // server-side disconnect fires on a ~60s ping timeout, so for a brief window
+            // after a refresh / navigate-back / network blip the OLD user still occupies
+            // the slot and our own pokemonId looks "taken". Kicking back to the picker
+            // here drops the user out of the room mid-session — instead, transparently
+            // pick a free pokemon and let the effect re-emit join. The old slot frees up
+            // on the next ping timeout.
             setTakenIds(resp.takenPokemonIds || []);
-            // On a true *initial* join collision, kick back to the picker.
-            // On a *reconnect* collision (someone grabbed our slot while we were briefly gone),
-            // pick a different free Pokémon and stay in the room rather than booting the user.
-            if (!initialJoinDoneRef.current) {
-              setJoined(false);
-              setPickError("Someone else just picked that Pokémon. Choose another.");
-              return;
-            }
             const taken = new Set(resp.takenPokemonIds || []);
             const available = POKEMON_LIST.filter((p) => !taken.has(p.id));
-            if (available.length > 0) {
-              const next = available[Math.floor(Math.random() * available.length)].id;
-              setPokemonId(next);
-              setStoredPokemonId(next);
+            if (available.length === 0) {
+              // Genuinely full room (>= POKEMON_LIST.length users): only then fall back to
+              // the picker so the user can resolve manually.
+              setJoined(false);
+              setPickError("This room is full — every pokemon is taken. Try another room.");
+              return;
             }
+            const next = available[Math.floor(Math.random() * available.length)].id;
+            setPokemonId(next);
+            setStoredPokemonId(next);
             return;
           }
           if (!initialJoinDoneRef.current) {
@@ -649,7 +655,7 @@ export default function RoomClient({
     (
       videoId: string,
       refresh: boolean,
-      cb: (resp: { lyrics: { synced: string | null; plain: string | null; title?: string | null; artist?: string | null } | null }) => void
+      cb: (resp: { lyrics: { synced: string | null; plain: string | null; title?: string | null; artist?: string | null; source?: string | null } | null }) => void
     ) => {
       const sock = socketRef.current;
       if (!sock) return cb({ lyrics: null });
@@ -661,6 +667,14 @@ export default function RoomClient({
   // For LyricsPanel: prefer the local audio's currentTime if rendered, else extrapolate from server playback
   const playbackRef = useRef(playback);
   useEffect(() => { playbackRef.current = playback; }, [playback]);
+
+  // Auto-hide the settings hint 2.5s after the most recent click (re-clicking bumps the
+  // counter, which retriggers this effect and resets the timer).
+  useEffect(() => {
+    if (settingsHintKey === 0) return;
+    const t = setTimeout(() => setSettingsHintKey(0), 2500);
+    return () => clearTimeout(t);
+  }, [settingsHintKey]);
   const getLyricsCurrentTime = useCallback(() => {
     const local = playerRef.current?.getCurrentTime();
     if (typeof local === "number" && local > 0) return local;
@@ -923,16 +937,22 @@ export default function RoomClient({
             <div className="name">{me?.name || name}</div>
             <div className="role">Online</div>
           </div>
-          <button
-            type="button"
-            className="icon-btn"
-            title="Settings"
-            aria-label="Settings"
-            disabled
-            style={{ opacity: 0.4, cursor: "default" }}
-          >
-            {SettingsIcon}
-          </button>
+          <div style={{ position: "relative" }}>
+            <button
+              type="button"
+              className="icon-btn"
+              title="Settings"
+              aria-label="Settings"
+              onClick={() => setSettingsHintKey((k) => k + 1)}
+            >
+              {SettingsIcon}
+            </button>
+            {settingsHintKey > 0 && (
+              <div key={settingsHintKey} className="settings-toast show">
+                Stay tuned for future updates ✨
+              </div>
+            )}
+          </div>
         </div>
       </aside>
 

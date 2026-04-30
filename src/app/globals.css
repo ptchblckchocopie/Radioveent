@@ -1210,6 +1210,34 @@ body {
   background: var(--surface-3, rgba(255, 255, 255, 0.1));
 }
 
+/* Settings cog hint — informational chip above the cog button in the user bar. */
+.settings-toast {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  right: 0;
+  background: var(--brand);
+  color: white;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 7px 12px;
+  border-radius: var(--radius-md);
+  box-shadow: 0 6px 18px rgba(88, 101, 242, 0.45);
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(6px);
+  z-index: 60;
+  animation: settingsToastIn 220ms cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+}
+.settings-toast.show {
+  opacity: 1;
+  transform: translateY(0);
+}
+@keyframes settingsToastIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
 /* History */
 .history-event {
   display: grid;
@@ -1233,11 +1261,15 @@ body {
 .history-event.skipped .icon { background: rgba(240, 177, 50, 0.2); color: var(--yellow); }
 .history-event.played .icon { background: var(--brand-soft); color: var(--brand); }
 .history-event.joined .icon, .history-event.left .icon { background: rgba(235, 69, 158, 0.2); color: var(--pink); }
+.history-event.paused .icon, .history-event.resumed .icon { background: var(--brand-soft); color: var(--brand); }
+.history-event.seeked .icon { background: rgba(0, 168, 252, 0.18); color: var(--text-link); }
+.history-event.reordered .icon { background: rgba(240, 177, 50, 0.18); color: var(--yellow); }
 .history-event.body .body { min-width: 0; line-height: 1.35; }
 .history-event .body { min-width: 0; line-height: 1.35; }
 .history-event .body .who { font-weight: 600; color: var(--text-primary); }
 .history-event .body .what { color: var(--text-secondary); }
 .history-event .body .song { color: var(--text-primary); font-weight: 500; }
+.history-event .body .extra { color: var(--text-muted); font-variant-numeric: tabular-nums; }
 .history-event .time { font-size: 11px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
 
 /* ─── Onboarding ─────────────────────────────── */

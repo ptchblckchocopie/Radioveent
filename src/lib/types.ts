@@ -30,7 +30,11 @@ export type ActivityType =
   | "playlist_added"
   | "track_removed"
   | "tracks_removed"
-  | "track_skipped";
+  | "track_skipped"
+  | "paused"
+  | "resumed"
+  | "seeked"
+  | "queue_reordered";
 
 export interface ChatMessage {
   id: string;
@@ -50,6 +54,11 @@ export interface ActivityEvent {
     trackTitle?: string;
     playlistTitle?: string;
     count?: number;
+    positionSec?: number;  // for paused / resumed
+    fromSec?: number;      // for seeked
+    toSec?: number;        // for seeked
+    fromIdx?: number;      // for queue_reordered (1-indexed for display)
+    toIdx?: number;        // for queue_reordered
   };
   timestamp: number;
 }

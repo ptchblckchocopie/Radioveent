@@ -157,7 +157,9 @@ function scoreLyricsCandidate(c, target) {
     else if (delta <= 15) durScore = 0.5;
     else durScore = 0.1;
   }
-  const syncedBonus = c.syncedLyrics ? 0.05 : 0;
+  // Synced lyrics are the whole point of theater mode — give a meaningful bonus so a
+  // synced match from any provider beats a plain match of comparable similarity.
+  const syncedBonus = c.synced ? 0.15 : 0;
   return titleSim * 0.45 + artistSim * 0.25 + durScore * 0.3 + syncedBonus;
 }
 
@@ -187,6 +189,239 @@ async function fetchTrackDurationSec(videoId) {
   }
 }
 
+// Detect LRC text by the presence of [mm:ss] timestamps. Some providers (e.g. NetEase)
+// return either synced LRC or plain text in the same field, so we sniff at parse time.
+function looksLikeLRC(text) {
+  return typeof text === "string" && /\[\d+:\d+/.test(text);
+}
+
+const NETEASE_HEADERS = {
+  "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+  "Referer": "https://music.163.com/",
+};
+
+// Normalize a candidate from any provider into the shape scoreLyricsCandidate expects.
+function makeCandidate({ synced, plain, trackName, artistName, duration, source }) {
+  return {
+    synced: synced || null,
+    plain: plain || null,
+    trackName: trackName || null,
+    artistName: artistName || null,
+    duration: Number.isFinite(duration) ? duration : 0,
+    source,
+  };
+}
+
+// ── Provider: lrclib.net (synced + plain, large Western catalog) ────────────────────
+async function fetchFromLrclib(target, rawTitleQuery) {
+  const out = [];
+  const { artist, track, durationSec } = target;
+
+  // Precise endpoint: /api/get with artist + track + duration. When this hits it's
+  // canonical, so we can return immediately without burning the search endpoint.
+  if (artist && track && durationSec > 0) {
+    try {
+      const url =
+        "https://lrclib.net/api/get?" +
+        new URLSearchParams({ artist_name: artist, track_name: track, duration: String(durationSec) });
+      const res = await fetch(url, { headers: LRCLIB_HEADERS });
+      if (res.ok) {
+        const c = await res.json();
+        out.push(makeCandidate({
+          synced: c.syncedLyrics, plain: c.plainLyrics,
+          trackName: c.trackName, artistName: c.artistName, duration: c.duration,
+          source: "lrclib",
+        }));
+        return out;
+      }
+    } catch (e) {
+      console.error("lrclib /api/get:", e?.message || e);
+    }
+  }
+
+  // Structured search.
+  if (artist || track) {
+    try {
+      const params = new URLSearchParams();
+      if (track) params.set("track_name", track);
+      if (artist) params.set("artist_name", artist);
+      const res = await fetch(`https://lrclib.net/api/search?${params}`, { headers: LRCLIB_HEADERS });
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data)) {
+          for (const c of data) {
+            out.push(makeCandidate({
+              synced: c.syncedLyrics, plain: c.plainLyrics,
+              trackName: c.trackName, artistName: c.artistName, duration: c.duration,
+              source: "lrclib",
+            }));
+          }
+        }
+      }
+    } catch (e) {
+      console.error("lrclib structured search:", e?.message || e);
+    }
+  }
+
+  // Free-text fallback when structured returned nothing.
+  if (out.length === 0 && rawTitleQuery) {
+    try {
+      const res = await fetch(
+        `https://lrclib.net/api/search?q=${encodeURIComponent(rawTitleQuery)}`,
+        { headers: LRCLIB_HEADERS }
+      );
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data)) {
+          for (const c of data) {
+            out.push(makeCandidate({
+              synced: c.syncedLyrics, plain: c.plainLyrics,
+              trackName: c.trackName, artistName: c.artistName, duration: c.duration,
+              source: "lrclib",
+            }));
+          }
+        }
+      }
+    } catch (e) {
+      console.error("lrclib q search:", e?.message || e);
+    }
+  }
+
+  return out;
+}
+
+// ── Provider: NetEase Cloud Music (huge Asian / OPM / J-pop / K-pop catalog, often synced) ──
+async function fetchFromNetEase(target) {
+  const out = [];
+  const { artist, track } = target;
+  if (!track) return out;
+
+  let songs = [];
+  try {
+    const query = artist ? `${artist} ${track}` : track;
+    const res = await fetch(
+      `https://music.163.com/api/search/get?s=${encodeURIComponent(query)}&type=1&limit=8`,
+      { headers: NETEASE_HEADERS }
+    );
+    if (!res.ok) return out;
+    const data = await res.json();
+    songs = data?.result?.songs || [];
+  } catch (e) {
+    console.error("netease search:", e?.message || e);
+    return out;
+  }
+  if (!songs.length) return out;
+
+  // Fetch lyrics for the top N candidates in parallel; NetEase serves them per-song-id.
+  const topN = songs.slice(0, 5);
+  const results = await Promise.allSettled(topN.map(async (s) => {
+    const url = `https://music.163.com/api/song/lyric?id=${s.id}&lv=1&kv=1&tv=-1`;
+    const r = await fetch(url, { headers: NETEASE_HEADERS });
+    if (!r.ok) return null;
+    const d = await r.json();
+    if (d?.nolyric || d?.uncollected) return null;
+    const text = d?.lrc?.lyric;
+    if (!text) return null;
+    const synced = looksLikeLRC(text) ? text : null;
+    const plain = synced ? null : text;
+    return makeCandidate({
+      synced,
+      plain,
+      trackName: s.name,
+      artistName: (s.artists || []).map((a) => a.name).filter(Boolean).join(", "),
+      duration: s.duration ? Math.round(s.duration / 1000) : 0,
+      source: "netease",
+    });
+  }));
+  for (const r of results) {
+    if (r.status === "fulfilled" && r.value) out.push(r.value);
+  }
+  return out;
+}
+
+// ── Provider: Genius (plain only — they don't expose lyrics via API, so we scrape) ─────
+// Opt-in: requires GENIUS_ACCESS_TOKEN env var (free, from api.genius.com/clients).
+function extractGeniusLyrics(html) {
+  // Genius wraps lyrics in <div data-lyrics-container="true">…</div>, possibly multiple.
+  const re = /<div[^>]*data-lyrics-container="true"[^>]*>([\s\S]*?)<\/div>/gi;
+  let m, text = "";
+  while ((m = re.exec(html))) {
+    const stripped = m[1]
+      .replace(/<br\s*\/?>/gi, "\n")
+      .replace(/<[^>]+>/g, "")
+      .replace(/&nbsp;/g, " ")
+      .replace(/&amp;/g, "&")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"')
+      .replace(/&#x27;|&#39;/g, "'");
+    text += stripped + "\n";
+  }
+  return text.trim() || null;
+}
+async function fetchFromGenius(target) {
+  const out = [];
+  const token = process.env.GENIUS_ACCESS_TOKEN;
+  if (!token) return out;
+  const { artist, track } = target;
+  if (!track) return out;
+
+  try {
+    const query = artist ? `${artist} ${track}` : track;
+    const sr = await fetch(`https://api.genius.com/search?q=${encodeURIComponent(query)}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!sr.ok) return out;
+    const sd = await sr.json();
+    const hits = (sd?.response?.hits || []).map((h) => h.result).filter((r) => r?.url);
+    if (!hits.length) return out;
+
+    const topN = hits.slice(0, 3);
+    const results = await Promise.allSettled(topN.map(async (r) => {
+      const html = await fetch(r.url).then((res) => res.text()).catch(() => null);
+      if (!html) return null;
+      const lyrics = extractGeniusLyrics(html);
+      if (!lyrics) return null;
+      return makeCandidate({
+        synced: null,
+        plain: lyrics,
+        trackName: r.title,
+        artistName: r.primary_artist?.name,
+        duration: 0,
+        source: "genius",
+      });
+    }));
+    for (const x of results) {
+      if (x.status === "fulfilled" && x.value) out.push(x.value);
+    }
+  } catch (e) {
+    console.error("genius:", e?.message || e);
+  }
+  return out;
+}
+
+// ── Provider: lyrics.ovh (plain only, last-ditch) — used as sequential fallback only ───
+async function fetchFromLyricsOvh({ artist, track }) {
+  if (!artist || !track) return null;
+  try {
+    const url = `https://api.lyrics.ovh/v1/${encodeURIComponent(artist)}/${encodeURIComponent(track)}`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!data?.lyrics || typeof data.lyrics !== "string") return null;
+    return makeCandidate({
+      synced: null,
+      plain: data.lyrics.trim(),
+      trackName: track,
+      artistName: artist,
+      duration: 0,
+      source: "lyrics.ovh",
+    });
+  } catch {
+    return null;
+  }
+}
+
 async function fetchLyrics(videoId, force = false) {
   if (!force) {
     const cached = lyricsCache.get(videoId);
@@ -202,65 +437,33 @@ async function fetchLyrics(videoId, force = false) {
   const { artist, track } = splitTitleArtist(meta.title, meta.channel);
   const durationSec = await fetchTrackDurationSec(videoId);
   const target = { artist, track, durationSec };
+  const rawTitleQuery = stripBareFeatures(cleanTitleForLyrics(meta.title));
+
+  // Fan out across providers in parallel. Genius is opt-in via env var; if no token,
+  // fetchFromGenius returns [] cheaply so it doesn't add latency.
+  const [lrclibR, neteaseR, geniusR] = await Promise.allSettled([
+    fetchFromLrclib(target, rawTitleQuery),
+    fetchFromNetEase(target),
+    fetchFromGenius(target),
+  ]);
+
+  const candidates = [];
+  if (lrclibR.status === "fulfilled") candidates.push(...(lrclibR.value || []));
+  if (neteaseR.status === "fulfilled") candidates.push(...(neteaseR.value || []));
+  if (geniusR.status === "fulfilled") candidates.push(...(geniusR.value || []));
 
   let pick = null;
-
-  // Strategy 1: precise /api/get when we have artist + track + duration.
-  if (artist && track && durationSec > 0) {
-    try {
-      const url =
-        "https://lrclib.net/api/get?" +
-        new URLSearchParams({
-          artist_name: artist,
-          track_name: track,
-          duration: String(durationSec),
-        });
-      const res = await fetch(url, { headers: LRCLIB_HEADERS });
-      if (res.ok) pick = await res.json();
-    } catch (e) {
-      console.error("lrclib /api/get failed:", e?.message || e);
-    }
+  if (candidates.length > 0) {
+    const ranked = candidates
+      .map((c) => ({ c, score: scoreLyricsCandidate(c, target) }))
+      .sort((a, b) => b.score - a.score);
+    pick = ranked[0].c;
   }
 
-  // Strategy 2: structured /api/search with track_name + artist_name, scored.
-  if (!pick && (artist || track)) {
-    try {
-      const params = new URLSearchParams();
-      if (track) params.set("track_name", track);
-      if (artist) params.set("artist_name", artist);
-      const res = await fetch(`https://lrclib.net/api/search?${params}`, { headers: LRCLIB_HEADERS });
-      if (res.ok) {
-        const data = await res.json();
-        if (Array.isArray(data) && data.length > 0) {
-          pick = data
-            .map((c) => ({ c, score: scoreLyricsCandidate(c, target) }))
-            .sort((a, b) => b.score - a.score)[0].c;
-        }
-      }
-    } catch (e) {
-      console.error("lrclib /api/search (structured) failed:", e?.message || e);
-    }
-  }
-
-  // Strategy 3: free-text fallback on the whole cleaned title, scored.
+  // Last-ditch: lyrics.ovh is plain-only with weak coverage. Only worth the round-trip
+  // when nothing else returned anything — a synced match from above always wins anyway.
   if (!pick) {
-    try {
-      const q = stripBareFeatures(cleanTitleForLyrics(meta.title));
-      const res = await fetch(
-        `https://lrclib.net/api/search?q=${encodeURIComponent(q)}`,
-        { headers: LRCLIB_HEADERS }
-      );
-      if (res.ok) {
-        const data = await res.json();
-        if (Array.isArray(data) && data.length > 0) {
-          pick = data
-            .map((c) => ({ c, score: scoreLyricsCandidate(c, target) }))
-            .sort((a, b) => b.score - a.score)[0].c;
-        }
-      }
-    } catch (e) {
-      console.error("lrclib /api/search (q) failed:", e?.message || e);
-    }
+    pick = await fetchFromLyricsOvh({ artist, track });
   }
 
   if (!pick) {
@@ -269,10 +472,11 @@ async function fetchLyrics(videoId, force = false) {
   }
 
   const lyrics = {
-    synced: pick.syncedLyrics || null,
-    plain: pick.plainLyrics || null,
+    synced: pick.synced || null,
+    plain: pick.plain || null,
     title: pick.trackName || null,
     artist: pick.artistName || null,
+    source: pick.source || null,
   };
   lyricsCache.set(videoId, { lyrics, expiresAt: Date.now() + LYRICS_TTL_MS });
   return lyrics;
@@ -685,16 +889,25 @@ function advanceQueue(io, room, opts = {}) {
     return;
   }
 
-  // Repeat-all: push the current track to the end of the queue before advancing
+  // Repeat-all: push the current track to the end of the queue before advancing.
+  // Track its index so shuffle doesn't immediately re-pick it (otherwise shuffle +
+  // repeat-all on a small queue will replay the same song multiple times in a row).
+  let justRecycledIdx = -1;
   if (room.repeat === "all" && room.current) {
     room.queue.push(room.current);
+    justRecycledIdx = room.queue.length - 1;
   }
 
   // Pick next: shuffled or sequential
   let next = null;
   if (room.queue.length > 0) {
     if (room.shuffle) {
-      const i = Math.floor(Math.random() * room.queue.length);
+      const len = room.queue.length;
+      // When repeat-all just recycled current to the end, exclude that slot from the
+      // random pick — unless it's literally the only thing in the queue (single-item
+      // queue + repeat-all → unavoidably replays the same track, which is fine).
+      const upper = (justRecycledIdx === len - 1 && len > 1) ? len - 1 : len;
+      const i = Math.floor(Math.random() * upper);
       next = room.queue.splice(i, 1)[0];
     } else {
       next = room.queue.shift();
@@ -1073,10 +1286,35 @@ app.prepare().then(() => {
       const room = rooms.get(ref.roomId);
       if (!room || !Array.isArray(trackIds)) return;
       const byId = new Map(room.queue.map((t) => [t.id, t]));
+      const oldPositions = new Map(room.queue.map((t, i) => [t.id, i]));
       const reordered = trackIds.map((id) => byId.get(id)).filter(Boolean);
-      if (reordered.length === room.queue.length) {
-        room.queue = reordered;
-        broadcastQueue(io, room);
+      if (reordered.length !== room.queue.length) return;
+      // Detect the dragged track by largest displacement — dnd-kit's other shifts are
+      // by 1 each, while the dragged item moves by N. Highlights the actual user action.
+      let movedTrack = null;
+      let movedFromIdx = -1;
+      let movedToIdx = -1;
+      let maxAbsDelta = 0;
+      reordered.forEach((t, newIdx) => {
+        const oldIdx = oldPositions.get(t.id);
+        if (oldIdx === undefined) return;
+        const delta = Math.abs(newIdx - oldIdx);
+        if (delta > maxAbsDelta) {
+          maxAbsDelta = delta;
+          movedTrack = t;
+          movedFromIdx = oldIdx;
+          movedToIdx = newIdx;
+        }
+      });
+      room.queue = reordered;
+      broadcastQueue(io, room);
+      if (movedTrack && maxAbsDelta > 0) {
+        const user = room.users.get(ref.userId);
+        logActivity(io, room, "queue_reordered", user, {
+          trackTitle: movedTrack.title,
+          fromIdx: movedFromIdx + 1, // 1-indexed for display
+          toIdx: movedToIdx + 1,
+        });
       }
     });
 
@@ -1085,8 +1323,18 @@ app.prepare().then(() => {
       if (!ref) return;
       const room = rooms.get(ref.roomId);
       if (!room || !room.current) return;
+      const wasPlaying = room.playback.playing;
       setPlayback(room, { playing: true, positionSec: effectivePosition(room) });
       broadcastPlayback(io, room);
+      // Only log when this actually toggles the state — back-to-back resume clicks
+      // shouldn't spam the feed.
+      if (!wasPlaying) {
+        const user = room.users.get(ref.userId);
+        logActivity(io, room, "resumed", user, {
+          trackTitle: room.current?.title,
+          positionSec: room.playback.positionSec,
+        });
+      }
     });
 
     socket.on("pause", () => {
@@ -1094,8 +1342,16 @@ app.prepare().then(() => {
       if (!ref) return;
       const room = rooms.get(ref.roomId);
       if (!room) return;
+      const wasPlaying = room.playback.playing;
       setPlayback(room, { playing: false, positionSec: effectivePosition(room) });
       broadcastPlayback(io, room);
+      if (wasPlaying) {
+        const user = room.users.get(ref.userId);
+        logActivity(io, room, "paused", user, {
+          trackTitle: room.current?.title,
+          positionSec: room.playback.positionSec,
+        });
+      }
     });
 
     socket.on("seek", ({ positionSec }) => {
@@ -1105,8 +1361,18 @@ app.prepare().then(() => {
       if (!room) return;
       const pos = Number(positionSec);
       if (!Number.isFinite(pos)) return;
+      const fromSec = Math.max(0, effectivePosition(room));
       setPlayback(room, { playing: room.playback.playing, positionSec: pos });
       broadcastPlayback(io, room);
+      // Filter out micro-seeks (< 1.5s) so accidental scrubber clicks don't pollute history.
+      if (Math.abs(pos - fromSec) >= 1.5 && room.current) {
+        const user = room.users.get(ref.userId);
+        logActivity(io, room, "seeked", user, {
+          trackTitle: room.current.title,
+          fromSec,
+          toSec: pos,
+        });
+      }
     });
 
     socket.on("skip", () => {

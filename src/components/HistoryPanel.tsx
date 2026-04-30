@@ -29,7 +29,30 @@ const ICONS: Record<string, ReactNode> = {
       <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" />
     </svg>
   ),
+  paused: (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1" /><rect x="14" y="5" width="4" height="14" rx="1" /></svg>
+  ),
+  resumed: (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M7 5v14l12-7z" /></svg>
+  ),
+  seeked: (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 12h14" /><path d="m13 6 6 6-6 6" />
+    </svg>
+  ),
+  reordered: (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 6h13M3 12h9M3 18h13" /><path d="m17 15 4 3-4 3" />
+    </svg>
+  ),
 };
+
+function fmtSec(sec?: number): string {
+  if (sec === undefined || !Number.isFinite(sec) || sec < 0) return "";
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return `${m}:${s.toString().padStart(2, "0")}`;
+}
 
 function relTime(ts: number, now: number): string {
   const diff = Math.max(0, Math.floor((now - ts) / 1000));
@@ -40,7 +63,7 @@ function relTime(ts: number, now: number): string {
   return `${Math.floor(diff / 86400)}d`;
 }
 
-function describe(e: ActivityEvent): { verb: string; song?: string } {
+function describe(e: ActivityEvent): { verb: string; song?: string; extra?: string } {
   switch (e.type) {
     case "track_added":
       return { verb: "added", song: e.payload.trackTitle };
@@ -56,6 +79,32 @@ function describe(e: ActivityEvent): { verb: string; song?: string } {
       return { verb: "joined the radio" };
     case "user_left":
       return { verb: "left" };
+    case "paused": {
+      const at = fmtSec(e.payload.positionSec);
+      return { verb: "paused", song: e.payload.trackTitle, extra: at ? ` at ${at}` : undefined };
+    }
+    case "resumed": {
+      const at = fmtSec(e.payload.positionSec);
+      return { verb: "resumed", song: e.payload.trackTitle, extra: at ? ` at ${at}` : undefined };
+    }
+    case "seeked": {
+      const from = fmtSec(e.payload.fromSec);
+      const to = fmtSec(e.payload.toSec);
+      const extra = from && to ? ` from ${from} → ${to}` : to ? ` to ${to}` : undefined;
+      return { verb: "scrubbed", song: e.payload.trackTitle, extra };
+    }
+    case "queue_reordered": {
+      const { fromIdx, toIdx } = e.payload;
+      if (fromIdx !== undefined && toIdx !== undefined) {
+        const dir = toIdx < fromIdx ? "up" : "down";
+        return {
+          verb: `moved`,
+          song: e.payload.trackTitle,
+          extra: ` ${dir} (#${fromIdx} → #${toIdx})`,
+        };
+      }
+      return { verb: "reordered the queue" };
+    }
   }
 }
 
@@ -73,6 +122,14 @@ function typeClass(t: ActivityEvent["type"]): string {
       return "joined";
     case "user_left":
       return "left";
+    case "paused":
+      return "paused";
+    case "resumed":
+      return "resumed";
+    case "seeked":
+      return "seeked";
+    case "queue_reordered":
+      return "reordered";
   }
 }
 
@@ -90,6 +147,14 @@ function iconKey(t: ActivityEvent["type"]): string {
       return "joined";
     case "user_left":
       return "left";
+    case "paused":
+      return "paused";
+    case "resumed":
+      return "resumed";
+    case "seeked":
+      return "seeked";
+    case "queue_reordered":
+      return "reordered";
   }
 }
 
@@ -113,7 +178,7 @@ export default function HistoryPanel({ events }: { events: ActivityEvent[] }) {
   return (
     <div className="right-body scroll">
       {sorted.map((e) => {
-        const { verb, song } = describe(e);
+        const { verb, song, extra } = describe(e);
         return (
           <div key={e.id} className={`history-event ${typeClass(e.type)}`}>
             <div className="icon">{ICONS[iconKey(e.type)]}</div>
@@ -121,6 +186,7 @@ export default function HistoryPanel({ events }: { events: ActivityEvent[] }) {
               <span className="who">{e.userName}</span>{" "}
               <span className="what">{verb}</span>
               {song && <> <span className="song">"{song}"</span></>}
+              {extra && <span className="extra">{extra}</span>}
             </div>
             <div className="time">{relTime(e.timestamp, now)}</div>
           </div>
