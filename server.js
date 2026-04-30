@@ -500,13 +500,25 @@ async function fetchLyrics(videoId, force = false) {
 }
 
 async function extractAudioUrl(videoId) {
-  const args = ["-f", "bestaudio", "-g", "--no-warnings"];
+  // Format selector: prefer audio-only, fall back to a combined progressive stream so
+  // videos that don't expose a separate audio-only format still work (HTML5 <audio>
+  // happily plays the audio track of an MP4).
+  // Extractor args: try the "tv" client before "web" — it returns a wider format set,
+  // including for some age-restricted or weirdly-encoded videos that bot the web client.
+  const args = [
+    "-f", "bestaudio/best",
+    "--extractor-args", "youtube:player_client=tv,web",
+    "--no-warnings",
+    "-g",
+  ];
   if (YTDLP_USE_COOKIES) args.push("--cookies", YT_COOKIES_PATH);
   args.push(`https://www.youtube.com/watch?v=${videoId}`);
   const { stdout } = await execFileAsync(YTDLP_PATH, args, {
     timeout: 20000,
     maxBuffer: 1024 * 1024,
   });
+  // For combined/split formats yt-dlp can return multiple URLs (one per stream); we want
+  // the first one — which is the audio stream when split, or the only stream when combined.
   const url = stdout.split("\n").find((line) => line.startsWith("http"));
   if (!url) throw new Error("no url in yt-dlp output");
   return url.trim();
