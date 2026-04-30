@@ -46,6 +46,23 @@ const MIME_FOR_EXT = {
 const execFileAsync = promisify(execFile);
 const YTDLP_PATH = process.env.YTDLP_PATH || "yt-dlp";
 
+// YouTube bot-walls requests from datacenter IPs (DigitalOcean / AWS / GCP) and demands
+// "Sign in to confirm you're not a bot". Pass cookies from a logged-in browser via the
+// YT_COOKIES_NETSCAPE env var (Netscape cookies.txt format) and we hand them to yt-dlp
+// with --cookies. Locally / on home IPs this isn't usually needed, so the env var is
+// optional — we only enable --cookies when it's set and writable.
+const YT_COOKIES_PATH = "/tmp/yt-cookies.txt";
+let YTDLP_USE_COOKIES = false;
+if (process.env.YT_COOKIES_NETSCAPE) {
+  try {
+    fs.writeFileSync(YT_COOKIES_PATH, process.env.YT_COOKIES_NETSCAPE, { mode: 0o600 });
+    YTDLP_USE_COOKIES = true;
+    console.log("yt-dlp: using YouTube cookies from YT_COOKIES_NETSCAPE env var");
+  } catch (e) {
+    console.error("yt-dlp: failed to write cookies file:", e?.message || e);
+  }
+}
+
 // videoId -> { url, expiresAt }
 const audioUrlCache = new Map();
 const AUDIO_URL_TTL_MS = 5 * 60 * 60 * 1000; // 5 hours
@@ -483,11 +500,13 @@ async function fetchLyrics(videoId, force = false) {
 }
 
 async function extractAudioUrl(videoId) {
-  const { stdout } = await execFileAsync(
-    YTDLP_PATH,
-    ["-f", "bestaudio", "-g", "--no-warnings", `https://www.youtube.com/watch?v=${videoId}`],
-    { timeout: 20000, maxBuffer: 1024 * 1024 }
-  );
+  const args = ["-f", "bestaudio", "-g", "--no-warnings"];
+  if (YTDLP_USE_COOKIES) args.push("--cookies", YT_COOKIES_PATH);
+  args.push(`https://www.youtube.com/watch?v=${videoId}`);
+  const { stdout } = await execFileAsync(YTDLP_PATH, args, {
+    timeout: 20000,
+    maxBuffer: 1024 * 1024,
+  });
   const url = stdout.split("\n").find((line) => line.startsWith("http"));
   if (!url) throw new Error("no url in yt-dlp output");
   return url.trim();
