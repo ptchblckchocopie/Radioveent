@@ -55,12 +55,22 @@ const YT_COOKIES_PATH = "/tmp/yt-cookies.txt";
 let YTDLP_USE_COOKIES = false;
 if (process.env.YT_COOKIES_NETSCAPE) {
   try {
-    fs.writeFileSync(YT_COOKIES_PATH, process.env.YT_COOKIES_NETSCAPE, { mode: 0o600 });
+    // Normalize line endings — Windows / clipboard exports often have \r\n which yt-dlp's
+    // cookie parser handles inconsistently across versions. Force \n and a trailing newline.
+    let cookies = process.env.YT_COOKIES_NETSCAPE.replace(/\r\n?/g, "\n");
+    if (!cookies.endsWith("\n")) cookies += "\n";
+    fs.writeFileSync(YT_COOKIES_PATH, cookies, { mode: 0o600 });
     YTDLP_USE_COOKIES = true;
-    console.log("yt-dlp: using YouTube cookies from YT_COOKIES_NETSCAPE env var");
+    const lines = cookies.split("\n").filter((l) => l && !l.startsWith("#")).length;
+    console.log(
+      `yt-dlp: loaded ${cookies.length} bytes of cookies (${lines} entries) from ` +
+      `YT_COOKIES_NETSCAPE → ${YT_COOKIES_PATH}`
+    );
   } catch (e) {
     console.error("yt-dlp: failed to write cookies file:", e?.message || e);
   }
+} else {
+  console.log("yt-dlp: YT_COOKIES_NETSCAPE not set — running without cookies (will hit YouTube bot-wall on datacenter IPs)");
 }
 
 // videoId -> { url, expiresAt }
@@ -500,13 +510,11 @@ async function fetchLyrics(videoId, force = false) {
 }
 
 async function extractAudioUrl(videoId) {
-  // Mobile clients (mweb, ios) usually return formats without the PO-token requirement
-  // that's been increasingly blocking the web/tv clients on datacenter IPs. Web is kept
-  // as last resort.
-  const baseArgs = [
-    "--extractor-args", "youtube:player_client=mweb,ios,web",
-    "--no-warnings",
-  ];
+  // Let yt-dlp use its built-in default client priority (currently tv,web,…). It tracks
+  // whichever client mix is currently working with YouTube's anti-bot measures, which
+  // changes month-to-month. Forcing a specific client mix risks excluding the only
+  // one that still works at any given time.
+  const baseArgs = ["--no-warnings"];
   if (YTDLP_USE_COOKIES) baseArgs.push("--cookies", YT_COOKIES_PATH);
 
   const url = `https://www.youtube.com/watch?v=${videoId}`;
@@ -522,8 +530,6 @@ async function extractAudioUrl(videoId) {
     return line.trim();
   } catch (e) {
     // Diagnostic: re-run with --list-formats to see what YouTube actually returned.
-    // Surface the (truncated) output to the client so we have something actionable
-    // when the format selector keeps missing.
     let diag = "";
     try {
       const { stdout, stderr } = await execFileAsync(
