@@ -5,7 +5,7 @@ const nextConfig = {
   turbopack: { root: path.resolve(__dirname) },
   allowedDevOrigins: [
     "*.trycloudflare.com",
-    "radio.veent.co",
+    "radio.veent.ph",
     "192.168.*.*",
     "10.*.*.*",
     "172.16.*.*",
