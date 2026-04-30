@@ -500,28 +500,45 @@ async function fetchLyrics(videoId, force = false) {
 }
 
 async function extractAudioUrl(videoId) {
-  // Format selector: prefer audio-only, fall back to a combined progressive stream so
-  // videos that don't expose a separate audio-only format still work (HTML5 <audio>
-  // happily plays the audio track of an MP4).
-  // Extractor args: try the "tv" client before "web" — it returns a wider format set,
-  // including for some age-restricted or weirdly-encoded videos that bot the web client.
-  const args = [
-    "-f", "bestaudio/best",
-    "--extractor-args", "youtube:player_client=tv,web",
+  // Mobile clients (mweb, ios) usually return formats without the PO-token requirement
+  // that's been increasingly blocking the web/tv clients on datacenter IPs. Web is kept
+  // as last resort.
+  const baseArgs = [
+    "--extractor-args", "youtube:player_client=mweb,ios,web",
     "--no-warnings",
-    "-g",
   ];
-  if (YTDLP_USE_COOKIES) args.push("--cookies", YT_COOKIES_PATH);
-  args.push(`https://www.youtube.com/watch?v=${videoId}`);
-  const { stdout } = await execFileAsync(YTDLP_PATH, args, {
-    timeout: 20000,
-    maxBuffer: 1024 * 1024,
-  });
-  // For combined/split formats yt-dlp can return multiple URLs (one per stream); we want
-  // the first one — which is the audio stream when split, or the only stream when combined.
-  const url = stdout.split("\n").find((line) => line.startsWith("http"));
-  if (!url) throw new Error("no url in yt-dlp output");
-  return url.trim();
+  if (YTDLP_USE_COOKIES) baseArgs.push("--cookies", YT_COOKIES_PATH);
+
+  const url = `https://www.youtube.com/watch?v=${videoId}`;
+
+  try {
+    const { stdout } = await execFileAsync(
+      YTDLP_PATH,
+      ["-f", "bestaudio/best", "-g", ...baseArgs, url],
+      { timeout: 20000, maxBuffer: 1024 * 1024 }
+    );
+    const line = stdout.split("\n").find((l) => l.startsWith("http"));
+    if (!line) throw new Error("no url in yt-dlp output");
+    return line.trim();
+  } catch (e) {
+    // Diagnostic: re-run with --list-formats to see what YouTube actually returned.
+    // Surface the (truncated) output to the client so we have something actionable
+    // when the format selector keeps missing.
+    let diag = "";
+    try {
+      const { stdout, stderr } = await execFileAsync(
+        YTDLP_PATH,
+        ["--list-formats", ...baseArgs, url],
+        { timeout: 20000, maxBuffer: 256 * 1024 }
+      );
+      diag = (stdout || stderr || "").slice(0, 1500);
+    } catch (le) {
+      diag = "list-formats also failed: " + (le?.stderr?.toString().slice(0, 500) || le?.message || le);
+    }
+    console.error("yt-dlp extraction failed for", videoId, "\n--- diagnostic ---\n", diag);
+    const origStderr = e?.stderr?.toString() || e?.message || String(e);
+    throw new Error(origStderr.slice(0, 400) + "\n--- list-formats ---\n" + diag);
+  }
 }
 
 async function getAudioUrlCached(videoId, force = false) {
