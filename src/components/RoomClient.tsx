@@ -21,6 +21,7 @@ import ChatPanel from "./ChatPanel";
 import HistoryPanel from "./HistoryPanel";
 import LyricsPanel from "./LyricsPanel";
 import ShareButton from "./ShareButton";
+import VeentLogo from "./VeentLogo";
 import { POKEMON } from "@/lib/pokemon";
 import {
   DndContext,
@@ -789,10 +790,12 @@ export default function RoomClient({
       <aside className="sidebar">
         <div className="sidebar-header">
           <h2>
+            <a href="/" style={{ display: "inline-flex", alignItems: "center", textDecoration: "none", color: "inherit" }}>
+              <VeentLogo size={22} />
+            </a>
             <span className="live-dot" />
-            {connected ? "Live" : "Connecting…"}
+            Veent Radio
           </h2>
-          <a href="/">← lobby</a>
         </div>
 
         <div className="section-label">

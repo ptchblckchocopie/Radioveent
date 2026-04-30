@@ -8,6 +8,7 @@ import { POKE_PLACES, POKE_PLACES_BY_ID, randomPlaceId } from "@/lib/places";
 import Avatar from "./Avatar";
 import PokePlace from "./PokePlace";
 import NicknamePage from "./NicknamePage";
+import VeentLogo from "./VeentLogo";
 
 function getStoredName() {
   if (typeof window === "undefined") return "";
@@ -72,8 +73,8 @@ export default function LobbyClient() {
       <div className="dash">
         <div className="dash-header">
           <span className="brand">
-            <span className="live-dot" />
-            Late Night Radio
+            <VeentLogo size={24} />
+            Veent Radio
           </span>
           <span style={{ color: "var(--text-muted)", fontSize: 13 }}>your dashboard</span>
           <div className="me">

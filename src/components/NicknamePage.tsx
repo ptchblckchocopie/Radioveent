@@ -25,7 +25,7 @@ export default function NicknamePage({ inviteRoom, takenIds = [], onSubmit }: Pr
         <div className="onb-card">
           <div className="onb-eyebrow">
             <span className="live-dot" />
-            {inviteRoom ? "You've been invited" : "Welcome to Late Night Radio"}
+            {inviteRoom ? "You've been invited" : "Welcome to Veent Radio"}
           </div>
           <h1>{inviteRoom ? `Join "${inviteRoom}"` : "Pick a nickname"}</h1>
           <p className="lead">

@@ -1024,6 +1024,39 @@ body {
 }
 .chat-input .icon-action:hover { color: var(--text-primary); }
 .chat-input .send.ready { color: var(--brand); }
+
+/* Emoji picker */
+.emoji-picker {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  right: -8px;
+  background: var(--bg-floating);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 8px;
+  display: grid;
+  grid-template-columns: repeat(8, 32px);
+  gap: 2px;
+  max-height: 200px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.5);
+  z-index: 50;
+  animation: slideDown 150ms cubic-bezier(.2,.8,.2,1);
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0,0,0,0.4) transparent;
+}
+.emoji-item {
+  width: 32px; height: 32px;
+  border: 0;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 18px;
+  display: flex; align-items: center; justify-content: center;
+  transition: background 80ms;
+}
+.emoji-item:hover { background: var(--bg-modifier-hover); }
 .chat-attachment {
   margin-bottom: 8px;
   display: flex; align-items: center; gap: 8px;

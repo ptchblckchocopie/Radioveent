@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ChatMessage } from "@/lib/types";
 import Avatar from "./Avatar";
 
@@ -51,14 +51,40 @@ function formatTime(ts: number) {
   return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
+const EMOJI_LIST = [
+  "😀","😂","🥹","😍","🥰","😎","🤩","😭","🔥","✨",
+  "💀","👀","🫡","🤔","😤","🥺","💜","❤️","💙","💚",
+  "👏","🙌","🤝","✌️","🤙","👋","🎵","🎶","🎧","🎤",
+  "🎸","🎹","🥁","🎷","🎺","🪗","💿","📻","🔊","🎼",
+];
+
 export default function ChatPanel({ messages, onSend, roomId }: Props) {
   const [input, setInput] = useState("");
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [emojiOpen, setEmojiOpen] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const textInputRef = useRef<HTMLInputElement>(null);
+  const emojiRef = useRef<HTMLDivElement>(null);
+
+  // Close emoji picker on outside click
+  useEffect(() => {
+    if (!emojiOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (emojiRef.current && !emojiRef.current.contains(e.target as Node)) setEmojiOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [emojiOpen]);
+
+  const insertEmoji = useCallback((emoji: string) => {
+    setInput((prev) => prev + emoji);
+    setEmojiOpen(false);
+    textInputRef.current?.focus();
+  }, []);
 
   useEffect(() => {
     const el = listRef.current;
@@ -202,7 +228,33 @@ export default function ChatPanel({ messages, onSend, roomId }: Props) {
               <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 17.93 8.83l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" />
             </svg>
           </button>
+          <div ref={emojiRef} style={{ position: "relative" }}>
+            <button
+              type="button"
+              className="icon-action"
+              onClick={() => setEmojiOpen((v) => !v)}
+              title="Emoji"
+              aria-label="Emoji"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="10" />
+                <path d="M8 14s1.5 2 4 2 4-2 4-2" />
+                <line x1="9" y1="9" x2="9.01" y2="9" />
+                <line x1="15" y1="9" x2="15.01" y2="9" />
+              </svg>
+            </button>
+            {emojiOpen && (
+              <div className="emoji-picker">
+                {EMOJI_LIST.map((e) => (
+                  <button key={e} type="button" className="emoji-item" onClick={() => insertEmoji(e)}>
+                    {e}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
           <input
+            ref={textInputRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onPaste={handlePaste}
