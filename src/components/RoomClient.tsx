@@ -216,38 +216,147 @@ function TheaterLyrics({
   );
 }
 
+function TheaterOverlay({
+  current,
+  users,
+  playback,
+  getLyricsCurrentTime,
+  handleFetchLyrics,
+  togglePlay,
+  skip,
+  seek,
+  onClose,
+}: {
+  current: Track;
+  users: User[];
+  playback: Playback;
+  getLyricsCurrentTime: () => number;
+  handleFetchLyrics: (videoId: string, refresh: boolean, cb: (resp: { lyrics: { synced: string | null; plain: string | null } | null }) => void) => void;
+  togglePlay: () => void;
+  skip: () => void;
+  seek: (sec: number) => void;
+  onClose: () => void;
+}) {
+  // ESC to close
+  React.useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [onClose]);
+
+  return (
+    <div className="theater" style={{ ["--g1" as string]: "#c44569", ["--g2" as string]: "#2b2d31" } as React.CSSProperties}>
+      {/* Animated background */}
+      <div className="theater-bg">
+        <div className="theater-blob theater-blob-1" />
+        <div className="theater-blob theater-blob-2" />
+        <div className="theater-blob theater-blob-3" />
+        <div className="theater-grain" />
+      </div>
+
+      <div className="theater-header">
+        <span className="theater-label">
+          <span className="live-dot" />
+          Theater mode · everyone is here
+        </span>
+        <div className="theater-song-info">
+          <div className="theater-song-title">{current.title}</div>
+          <div className="theater-song-artist">
+            {current.addedByName ? `added by ${current.addedByName}` : ""}
+          </div>
+        </div>
+        <button className="theater-exit-btn" onClick={onClose}>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7" />
+          </svg>
+          Exit theater
+        </button>
+      </div>
+
+      <div className="theater-lyrics-body">
+        <TheaterLyrics
+          videoId={current.videoId}
+          getCurrentTime={getLyricsCurrentTime}
+          fetchLyrics={handleFetchLyrics}
+        />
+      </div>
+
+      <TheaterControls
+        playing={playback.playing}
+        getCurrentTime={getLyricsCurrentTime}
+        duration={0}
+        onTogglePlay={togglePlay}
+        onSkip={skip}
+        onSeek={seek}
+      />
+
+      {/* Presence chips */}
+      <div className="theater-presence">
+        {users.map((u) => (
+          <span key={u.id} className="theater-chip">
+            <Avatar pokemonId={u.pokemonId} size={22} />
+            {u.name}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function TheaterControls({
   playing,
   getCurrentTime,
   onTogglePlay,
   onSkip,
+  onSeek,
 }: {
   playing: boolean;
   getCurrentTime: () => number;
   duration: number;
   onTogglePlay: () => void;
   onSkip: () => void;
+  onSeek?: (sec: number) => void;
 }) {
   const [time, setTime] = React.useState(0);
+  const [dur, setDur] = React.useState(0);
   React.useEffect(() => {
-    const tick = () => setTime(getCurrentTime());
+    const tick = () => {
+      setTime(getCurrentTime());
+      // Try to get duration from the audio element
+      const audio = document.querySelector("audio");
+      if (audio && Number.isFinite(audio.duration)) setDur(audio.duration);
+    };
     tick();
     const iv = setInterval(tick, 250);
     return () => clearInterval(iv);
   }, [getCurrentTime]);
 
+  const pct = dur > 0 ? Math.min(100, (time / dur) * 100) : 0;
+
   return (
     <div className="theater-controls">
-      <span className="theater-time">{formatTheaterTime(time)}</span>
-      <div className="theater-btns">
-        <button className="theater-ctrl play" onClick={onTogglePlay}>
-          {playing ? PauseCtrlIcon : PlayCtrlIcon}
-        </button>
-        <button className="theater-ctrl" onClick={onSkip}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M5 5v14l9-7zM16 5h3v14h-3z" /></svg>
-        </button>
+      <div
+        className="theater-bar"
+        onClick={(e) => {
+          if (!dur || !onSeek) return;
+          const r = e.currentTarget.getBoundingClientRect();
+          onSeek(((e.clientX - r.left) / r.width) * dur);
+        }}
+      >
+        <div className="theater-bar-fill" style={{ width: `${pct}%` }} />
       </div>
-      <span className="theater-time" />
+      <div className="theater-times">
+        <span>{formatTheaterTime(time)}</span>
+        <div className="theater-btns">
+          <button className="theater-ctrl play" onClick={onTogglePlay}>
+            {playing ? PauseCtrlIcon : PlayCtrlIcon}
+          </button>
+          <button className="theater-ctrl" onClick={onSkip}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M5 5v14l9-7zM16 5h3v14h-3z" /></svg>
+          </button>
+        </div>
+        <span style={{ textAlign: "right" }}>{formatTheaterTime(dur)}</span>
+      </div>
     </div>
   );
 }
@@ -745,45 +854,17 @@ export default function RoomClient({
   return (
     <>
       {theaterActive && current && (
-        <div className="theater">
-          <div className="theater-header">
-            <span className="theater-label">
-              <span className="live-dot" />
-              Theater mode · everyone is here
-            </span>
-            <div className="theater-song-info">
-              <div className="theater-song-title">{current.title}</div>
-              <div className="theater-song-artist">
-                {current.addedByName ? `added by ${current.addedByName}` : ""}
-              </div>
-            </div>
-            <button
-              className="theater-exit-btn"
-              onClick={() => setTheaterMode(false)}
-            >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7" />
-              </svg>
-              Exit theater
-            </button>
-          </div>
-
-          <div className="theater-lyrics-body">
-            <TheaterLyrics
-              videoId={current.videoId}
-              getCurrentTime={getLyricsCurrentTime}
-              fetchLyrics={handleFetchLyrics}
-            />
-          </div>
-
-          <TheaterControls
-            playing={playback.playing}
-            getCurrentTime={getLyricsCurrentTime}
-            duration={0}
-            onTogglePlay={togglePlay}
-            onSkip={skip}
-          />
-        </div>
+        <TheaterOverlay
+          current={current}
+          users={users}
+          playback={playback}
+          getLyricsCurrentTime={getLyricsCurrentTime}
+          handleFetchLyrics={handleFetchLyrics}
+          togglePlay={togglePlay}
+          skip={skip}
+          seek={seek}
+          onClose={() => setTheaterMode(false)}
+        />
       )}
 
     <div className="app" style={theaterActive ? { display: "none" } : undefined}>
@@ -1069,7 +1150,11 @@ export default function RoomClient({
                 videoId={current.videoId}
                 getCurrentTime={getLyricsCurrentTime}
                 fetchLyrics={handleFetchLyrics}
+                onSeek={seek}
               />
+              <div className="inline-lyrics-footer">
+                Click a line to jump everyone there
+              </div>
             </div>
           ) : (
 

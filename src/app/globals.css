@@ -1851,13 +1851,43 @@ svg { display: block; }
   color: var(--text-primary);
   background: var(--bg-modifier-hover);
 }
-.inline-lyrics .lyrics-wrap { flex: 1; min-height: 0; }
-.inline-lyrics .lyrics-line { font-size: 16px; font-weight: 500; }
-.inline-lyrics .lyrics-line.active {
-  color: var(--brand);
-  font-size: 18px;
-  font-weight: 700;
+.inline-lyrics-footer {
+  padding: 10px 18px;
+  font-size: 11px;
+  color: var(--text-faint);
+  border-top: 1px solid var(--border);
+  text-align: center;
+  flex-shrink: 0;
 }
+.inline-lyrics .lyrics-wrap { flex: 1; min-height: 0; }
+.inline-lyrics .lyrics-scroller {
+  flex: 1; overflow-y: auto; padding: 0 28px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,0.1) transparent;
+}
+.inline-lyrics .lyrics-pad { height: 50%; }
+.inline-lyrics .lyrics-line {
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1.4;
+  letter-spacing: -0.005em;
+  color: rgba(255,255,255,0.55);
+  padding: 8px 0;
+  cursor: pointer;
+  transition: color 350ms ease, font-size 350ms ease;
+}
+.inline-lyrics .lyrics-line:hover { color: white; }
+.inline-lyrics .lyrics-line.past { color: rgba(255,255,255,0.32); }
+.inline-lyrics .lyrics-line.active {
+  color: var(--lyrics-accent, var(--brand));
+  font-size: 28px;
+}
+.inline-lyrics .lyrics-line.empty {
+  color: rgba(255,255,255,0.18);
+  font-size: 14px;
+  font-weight: 500;
+}
+.inline-lyrics .lyrics-line.active.empty { font-size: 18px; }
 
 /* ─── Theater Mode (full-screen) ─────────────────────────────── */
 .theater {
@@ -1866,11 +1896,33 @@ svg { display: block; }
   z-index: 900;
   display: flex;
   flex-direction: column;
-  background:
-    linear-gradient(180deg, rgba(0,0,0,0.5) 0%, rgba(0,0,0,0.7) 100%),
-    linear-gradient(135deg, #5865f2 0%, #1e1f22 60%,  var(--bg-tertiary) 100%);
+  background: #0a0a0a;
   color: white;
   overflow: hidden;
+}
+/* Animated gradient blobs */
+.theater-bg {
+  position: absolute; inset: 0; overflow: hidden; pointer-events: none;
+}
+.theater-blob {
+  position: absolute; border-radius: 50%;
+  filter: blur(100px); opacity: 0.7;
+  animation: theaterDrift 22s infinite ease-in-out alternate;
+}
+.theater-blob-1 { width: 700px; height: 700px; background: var(--g1, #5865f2); top: -250px; left: -200px; }
+.theater-blob-2 { width: 600px; height: 600px; background: var(--g2, #2b2d31); bottom: -250px; right: -150px; animation-delay: -8s; }
+.theater-blob-3 { width: 500px; height: 500px; background: var(--g1, #5865f2); top: 30%; left: 50%; opacity: 0.4; animation-delay: -14s; }
+@keyframes theaterDrift {
+  0%   { transform: translate(0, 0) scale(1); }
+  50%  { transform: translate(100px, -50px) scale(1.18); }
+  100% { transform: translate(-60px, 80px) scale(0.9); }
+}
+.theater-grain {
+  position: absolute; inset: 0;
+  background-image: radial-gradient(rgba(255,255,255,0.08) 1px, transparent 1px);
+  background-size: 3px 3px;
+  opacity: 0.4; mix-blend-mode: overlay;
+  pointer-events: none;
 }
 
 /* Header: label left, song info center, exit right */
@@ -2021,6 +2073,33 @@ svg { display: block; }
   color: rgba(255,255,255,0.35);
   text-align: center;
 }
+/* Karaoke underline */
+.theater-underline {
+  position: absolute;
+  left: 50%; bottom: -8px;
+  width: min(60%, 600px);
+  height: 3px;
+  background: linear-gradient(90deg, white, rgba(255,255,255,0.3));
+  border-radius: 2px;
+  transform-origin: left center;
+  transform: translateX(-50%) scaleX(0);
+  transition: transform 500ms linear;
+}
+/* Theater progress bar */
+.theater-bar {
+  height: 4px;
+  background: rgba(255,255,255,0.18);
+  border-radius: 2px;
+  cursor: pointer;
+  position: relative;
+  transition: height 120ms;
+}
+.theater-bar:hover { height: 6px; }
+.theater-bar-fill {
+  position: absolute; inset: 0; right: auto;
+  background: white;
+  border-radius: 2px;
+}
 
 /* Bottom controls */
 .theater-controls {
@@ -2061,6 +2140,31 @@ svg { display: block; }
   color: black;
 }
 .theater-ctrl.play:hover { transform: scale(1.08); }
+.theater-times {
+  display: grid;
+  grid-template-columns: 60px 1fr 60px;
+  align-items: center;
+  font-size: 12px;
+  opacity: 0.8;
+  font-variant-numeric: tabular-nums;
+}
+/* Presence chips */
+.theater-presence {
+  position: relative; z-index: 2;
+  display: flex; flex-wrap: wrap;
+  gap: 8px; justify-content: center;
+  padding: 0 36px 22px;
+  flex-shrink: 0;
+}
+.theater-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: rgba(0,0,0,0.45);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 999px;
+  padding: 4px 12px 4px 4px;
+  font-size: 11px; font-weight: 600;
+}
 
 /* ════════════════════════════════════════════════════════════
    RESPONSIVE

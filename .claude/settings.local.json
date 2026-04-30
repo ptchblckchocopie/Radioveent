@@ -5,7 +5,10 @@
       "Bash(where yt-dlp:*)",
       "Bash(npm install:*)",
       "Bash(npx next:*)",
-      "Bash(where cloudflared:*)"
+      "Bash(where cloudflared:*)",
+      "WebFetch(domain:api.anthropic.com)",
+      "Read(//tmp/**)",
+      "Bash(tar xf:*)"
     ]
   }
 }

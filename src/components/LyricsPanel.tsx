@@ -16,6 +16,7 @@ type Props = {
     refresh: boolean,
     cb: (resp: { lyrics: Lyrics | null }) => void
   ) => void;
+  onSeek?: (timeSec: number) => void;
 };
 
 interface LyricsLine {
@@ -26,9 +27,6 @@ interface LyricsLine {
 function parseLRC(text: string): LyricsLine[] {
   const out: LyricsLine[] = [];
   for (const raw of text.split(/\r?\n/)) {
-    // A single LRC line can have multiple timestamps prefixed (e.g., for choruses):
-    //   [00:12.34][01:24.56]Same chorus line
-    // Iterate all timestamps and emit one entry per timestamp.
     const re = /\[(\d+):(\d+(?:\.\d+)?)\]/g;
     const stamps: number[] = [];
     let lastEnd = 0;
@@ -47,17 +45,15 @@ function parseLRC(text: string): LyricsLine[] {
   return out;
 }
 
-export default function LyricsPanel({ videoId, getCurrentTime, fetchLyrics }: Props) {
+export default function LyricsPanel({ videoId, getCurrentTime, fetchLyrics, onSeek }: Props) {
   const [lyrics, setLyrics] = useState<Lyrics | null>(null);
   const [loading, setLoading] = useState(false);
   const [activeIdx, setActiveIdx] = useState(-1);
   const [reloadKey, setReloadKey] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
-  const activeLineRef = useRef<HTMLDivElement>(null);
+  const lineRefs = useRef<(HTMLDivElement | null)[]>([]);
   const reqIdRef = useRef(0);
-  // Consumed once on the next fetch so it only forces a single refresh, not all subsequent fetches.
   const forceNextRef = useRef(false);
-  // Track is changing — reset the user-initiated refresh flag for the new track.
   const lastVideoIdRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -102,7 +98,6 @@ export default function LyricsPanel({ videoId, getCurrentTime, fetchLyrics }: Pr
     if (!syncedLines || syncedLines.length === 0) return;
     const tick = () => {
       const t = getCurrentTime();
-      // Binary search would be nicer; linear is fine for ~100 lines.
       let idx = -1;
       for (let i = 0; i < syncedLines.length; i++) {
         if (syncedLines[i].time <= t + 0.25) idx = i;
@@ -115,18 +110,22 @@ export default function LyricsPanel({ videoId, getCurrentTime, fetchLyrics }: Pr
     return () => clearInterval(interval);
   }, [syncedLines, getCurrentTime]);
 
-  // Auto-scroll active line into the middle of the panel
+  // Auto-scroll active line to center
   useEffect(() => {
-    const list = listRef.current;
-    const target = activeLineRef.current;
-    if (!list || !target) return;
-    const targetTop = target.offsetTop - list.offsetTop;
-    const desiredScroll = targetTop - list.clientHeight / 2 + target.clientHeight / 2;
-    list.scrollTo({ top: Math.max(0, desiredScroll), behavior: "smooth" });
+    const el = lineRefs.current[activeIdx];
+    const sc = listRef.current;
+    if (!el || !sc) return;
+    const target = el.offsetTop - sc.clientHeight / 2 + el.clientHeight / 2;
+    sc.scrollTo({ top: Math.max(0, target), behavior: "smooth" });
   }, [activeIdx]);
 
   if (!videoId) {
-    return <div className="lyrics-empty">Add a song to see lyrics here.</div>;
+    return (
+      <div className="lyrics-empty">
+        <div className="lyrics-empty-icon">♫</div>
+        <div>Add a song to see lyrics here.</div>
+      </div>
+    );
   }
   if (loading) {
     return <div className="lyrics-empty">Loading lyrics…</div>;
@@ -134,10 +133,10 @@ export default function LyricsPanel({ videoId, getCurrentTime, fetchLyrics }: Pr
   if (!lyrics || (!syncedLines && !plainLines)) {
     return (
       <div className="lyrics-empty">
-        <div style={{ fontSize: 36, marginBottom: 8 }}>𝅘𝅥𝅮</div>
-        <div>No lyrics found for this track.</div>
+        <div className="lyrics-empty-icon">♫</div>
+        <div className="lyrics-empty-title">No lyrics yet</div>
         <div style={{ fontSize: 12, color: "var(--text-faint)", marginTop: 6 }}>
-          via lrclib.net — only popular songs are indexed.
+          We don't have synced lyrics for this song.
         </div>
         <button type="button" className="lyrics-retry" onClick={handleRetry}>
           Try again
@@ -148,35 +147,40 @@ export default function LyricsPanel({ videoId, getCurrentTime, fetchLyrics }: Pr
 
   return (
     <div className="lyrics-wrap">
-      {(lyrics.title || lyrics.artist) && (
-        <div className="lyrics-meta">
-          {lyrics.title && <strong>{lyrics.title}</strong>}
-          {lyrics.title && lyrics.artist && " · "}
-          {lyrics.artist}
-        </div>
-      )}
-      <div className="lyrics-list scroll" ref={listRef}>
+      <div className="lyrics-scroller scroll" ref={listRef}>
+        <div className="lyrics-pad" />
         {syncedLines ? (
-          syncedLines.map((line, i) => (
-            <div
-              key={i}
-              ref={i === activeIdx ? activeLineRef : null}
-              className={
-                "lyrics-line" +
-                (i === activeIdx ? " active" : "") +
-                (i < activeIdx ? " past" : "")
-              }
-            >
-              {line.text || "♪"}
-            </div>
-          ))
+          syncedLines.map((line, i) => {
+            const dist = Math.abs(i - activeIdx);
+            const isActive = i === activeIdx;
+            const isPast = i < activeIdx;
+            const isEmpty = !line.text;
+            const opacity = isActive ? 1 : Math.max(0.18, 1 - dist * 0.18);
+            return (
+              <div
+                key={i}
+                ref={(el) => { lineRefs.current[i] = el; }}
+                className={
+                  "lyrics-line" +
+                  (isActive ? " active" : "") +
+                  (isPast ? " past" : "") +
+                  (isEmpty ? " empty" : "")
+                }
+                style={{ opacity }}
+                onClick={() => onSeek?.(line.time)}
+              >
+                {line.text || "·"}
+              </div>
+            );
+          })
         ) : plainLines ? (
           plainLines.map((line, i) => (
             <div key={i} className="lyrics-line plain">
-              {line || " "}
+              {line || " "}
             </div>
           ))
         ) : null}
+        <div className="lyrics-pad" />
       </div>
       <div className="lyrics-attribution">
         <span>{syncedLines ? "Synced lyrics" : "Plain lyrics"} · lrclib.net</span>
