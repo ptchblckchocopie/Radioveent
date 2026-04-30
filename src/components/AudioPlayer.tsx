@@ -18,11 +18,14 @@ type Props = {
   shuffle: boolean;
   repeat: "off" | "one" | "all";
   hasNext: boolean;
+  lyricsActive?: boolean;
   onTogglePlay: () => void;
   onSkip: () => void;
   onSeek: (positionSec: number) => void;
   onToggleShuffle: () => void;
   onCycleRepeat: () => void;
+  onToggleLyrics?: () => void;
+  onTheaterMode?: () => void;
   onEnded: () => void;
   fetchAudioUrl: (
     videoId: string,
@@ -101,6 +104,16 @@ const HeadphonesIcon = (
     <path d="M3 18v-6a9 9 0 0 1 18 0v6" /><path d="M21 19a2 2 0 0 1-2 2h-1v-7h3zM3 19a2 2 0 0 0 2 2h1v-7H3z" />
   </svg>
 );
+const LyricsIcon = (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M9 18V5l12-2v13" /><circle cx="6" cy="18" r="3" /><circle cx="18" cy="16" r="3" />
+  </svg>
+);
+const TheaterIcon = (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" />
+  </svg>
+);
 
 const AudioPlayer = forwardRef<AudioPlayerHandle, Props>(function AudioPlayer(
   {
@@ -111,11 +124,14 @@ const AudioPlayer = forwardRef<AudioPlayerHandle, Props>(function AudioPlayer(
     shuffle,
     repeat,
     hasNext,
+    lyricsActive,
     onTogglePlay,
     onSkip,
     onSeek,
     onToggleShuffle,
     onCycleRepeat,
+    onToggleLyrics,
+    onTheaterMode,
     onEnded,
     fetchAudioUrl,
   },
@@ -422,6 +438,15 @@ const AudioPlayer = forwardRef<AudioPlayerHandle, Props>(function AudioPlayer(
           >
             {repeat === "one" ? RepeatOneIcon : RepeatIcon}
           </button>
+          {onToggleLyrics && (
+            <button
+              className={"ctrl" + (lyricsActive ? " active" : "")}
+              onClick={onToggleLyrics}
+              title={lyricsActive ? "Hide lyrics" : "Show lyrics"}
+            >
+              {LyricsIcon}
+            </button>
+          )}
 
           <div className="np-volume">
             <button

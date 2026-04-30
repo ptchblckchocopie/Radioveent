@@ -1268,6 +1268,13 @@ body {
   object-fit: contain;
   image-rendering: pixelated;
 }
+.poke-tile .num {
+  position: absolute;
+  top: 2px; left: 4px;
+  font-size: 9px;
+  color: var(--text-muted);
+  font-weight: 600;
+}
 .onb-randomize {
   background: var(--bg-elevated);
   border: 1px solid var(--border);
@@ -1470,6 +1477,14 @@ body {
   font-size: 16px; font-weight: 700;
   color: white;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.radio-card .info .place-sub {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-bottom: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 600;
 }
 .radio-card .info .now-line {
   font-size: 12px; color: var(--text-muted);
@@ -1702,3 +1717,217 @@ body {
 .modal-btn-primary:disabled { background: var(--bg-elevated); color: var(--text-muted); cursor: not-allowed; }
 
 svg { display: block; }
+
+/* ─── Inline Lyrics Panel (V1 Spotify style) ─────────────────── */
+.inline-lyrics {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg-secondary);
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  overflow: hidden;
+}
+.inline-lyrics-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  color: var(--text-primary);
+}
+.inline-lyrics-header svg { color: var(--brand); flex-shrink: 0; }
+.inline-lyrics-title {
+  font-size: 15px;
+  font-weight: 700;
+}
+.inline-lyrics-badge {
+  background: var(--green);
+  color: white;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+.inline-lyrics-icon-btn {
+  width: 28px; height: 28px;
+  border: 0; background: transparent;
+  color: var(--text-muted);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+}
+.inline-lyrics-icon-btn:hover {
+  color: var(--text-primary);
+  background: var(--bg-modifier-hover);
+}
+.inline-lyrics .lyrics-wrap { flex: 1; min-height: 0; }
+.inline-lyrics .lyrics-line { font-size: 16px; font-weight: 500; }
+.inline-lyrics .lyrics-line.active {
+  color: var(--brand);
+  font-size: 18px;
+  font-weight: 700;
+}
+
+/* ─── Theater Mode (full-screen) ─────────────────────────────── */
+.theater {
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+  display: flex;
+  flex-direction: column;
+  background:
+    linear-gradient(180deg, rgba(0,0,0,0.5) 0%, rgba(0,0,0,0.7) 100%),
+    linear-gradient(135deg, #5865f2 0%, #1e1f22 60%,  var(--bg-tertiary) 100%);
+  color: white;
+  overflow: hidden;
+}
+
+/* Header: label left, song info center, exit right */
+.theater-header {
+  display: flex;
+  align-items: center;
+  padding: 16px 24px;
+  flex-shrink: 0;
+  position: relative;
+  z-index: 2;
+}
+.theater-label {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--yellow);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.theater-label .live-dot { width: 6px; height: 6px; }
+.theater-song-info {
+  flex: 1;
+  text-align: center;
+  min-width: 0;
+}
+.theater-song-title {
+  font-size: 14px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.theater-song-artist {
+  font-size: 12px;
+  color: rgba(255,255,255,0.55);
+}
+.theater-exit-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(255,255,255,0.12);
+  border: 1px solid rgba(255,255,255,0.18);
+  color: white;
+  font: inherit;
+  font-weight: 600;
+  font-size: 12px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+  transition: all 140ms;
+  flex-shrink: 0;
+}
+.theater-exit-btn:hover {
+  background: rgba(255,255,255,0.22);
+  transform: translateY(-1px);
+}
+
+/* Lyrics area — centered, fills remaining space */
+.theater-lyrics-body {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 80px;
+  min-height: 0;
+  position: relative;
+  z-index: 1;
+}
+.theater-lyrics-lines {
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  max-width: 1000px;
+  width: 100%;
+}
+.theater-line {
+  transition: all 350ms ease;
+}
+.theater-line.prev {
+  font-size: 22px;
+  font-weight: 500;
+  color: rgba(255,255,255,0.25);
+  font-style: italic;
+}
+.theater-line.current {
+  font-size: 52px;
+  font-weight: 900;
+  color: white;
+  text-shadow: 0 4px 30px rgba(0,0,0,0.5);
+  line-height: 1.1;
+  letter-spacing: -0.03em;
+}
+.theater-line.next {
+  font-size: 22px;
+  font-weight: 500;
+  color: rgba(255,255,255,0.25);
+}
+.theater-lyrics-empty {
+  font-size: 22px;
+  color: rgba(255,255,255,0.35);
+  text-align: center;
+}
+
+/* Bottom controls */
+.theater-controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  padding: 20px 24px;
+  flex-shrink: 0;
+  position: relative;
+  z-index: 2;
+}
+.theater-time {
+  font-size: 12px;
+  color: rgba(255,255,255,0.5);
+  font-variant-numeric: tabular-nums;
+  min-width: 40px;
+}
+.theater-btns {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.theater-ctrl {
+  width: 36px; height: 36px;
+  border: 0; border-radius: 50%;
+  background: rgba(255,255,255,0.15);
+  color: white;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  backdrop-filter: blur(8px);
+  transition: all 120ms;
+}
+.theater-ctrl:hover { background: rgba(255,255,255,0.25); transform: scale(1.05); }
+.theater-ctrl.play {
+  width: 48px; height: 48px;
+  background: white;
+  color: black;
+}
+.theater-ctrl.play:hover { transform: scale(1.08); }

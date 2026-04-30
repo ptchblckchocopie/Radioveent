@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { io as ioClient, type Socket } from "socket.io-client";
 import { nanoid } from "nanoid";
@@ -7,6 +7,7 @@ import type { RoomSummary } from "@/lib/types";
 import { POKE_PLACES, POKE_PLACES_BY_ID, randomPlaceId } from "@/lib/places";
 import Avatar from "./Avatar";
 import PokePlace from "./PokePlace";
+import NicknamePage from "./NicknamePage";
 
 function getStoredName() {
   if (typeof window === "undefined") return "";
@@ -26,10 +27,12 @@ export default function LobbyClient() {
   const [showCreate, setShowCreate] = useState(false);
   const [storedName, setStoredNameState] = useState<string>("");
   const [storedPid, setStoredPid] = useState<number | null>(null);
+  const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
     setStoredNameState(getStoredName());
     setStoredPid(getStoredPokemonId());
+    setHydrated(true);
   }, []);
 
   useEffect(() => {
@@ -46,23 +49,37 @@ export default function LobbyClient() {
     };
   }, []);
 
+  const handleOnboardingSubmit = useCallback(
+    (data: { name: string; pokeId: number }) => {
+      localStorage.setItem("mq:name", data.name);
+      localStorage.setItem("mq:pokemonId", String(data.pokeId));
+      setStoredNameState(data.name);
+      setStoredPid(data.pokeId);
+    },
+    [],
+  );
+
+  // Don't render until hydrated to avoid flash
+  if (!hydrated) return null;
+
+  // Gate: show onboarding if no stored identity
+  if (!storedName) {
+    return <NicknamePage onSubmit={handleOnboardingSubmit} />;
+  }
+
   return (
     <div className="page">
       <div className="dash">
         <div className="dash-header">
           <span className="brand">
             <span className="live-dot" />
-            Veent Radio
+            Late Night Radio
           </span>
-          <span style={{ color: "var(--text-muted)", fontSize: 13 }}>
-            tonight's rooms · {rooms.reduce((n, r) => n + r.listenerCount, 0)} listening
-          </span>
-          {storedName && (
-            <div className="me">
-              <Avatar pokemonId={storedPid} size={32} />
-              <span className="name">{storedName}</span>
-            </div>
-          )}
+          <span style={{ color: "var(--text-muted)", fontSize: 13 }}>your dashboard</span>
+          <div className="me">
+            <Avatar pokemonId={storedPid} size={32} />
+            <span className="name">{storedName}</span>
+          </div>
         </div>
 
         <div className="dash-body scroll">
@@ -84,13 +101,14 @@ export default function LobbyClient() {
             <div className="dash-grid">
               {rooms.map((r) => {
                 const place = r.placeId ? POKE_PLACES_BY_ID[r.placeId] : null;
+                const isLive = r.listenerCount > 0;
                 return (
                   <button
                     key={r.id}
                     className="radio-card"
                     onClick={() => router.push(`/r/${r.id}`)}
                   >
-                    <div className="cover" style={{ background: "transparent" }}>
+                    <div className="cover place" style={{ background: "transparent" }}>
                       {r.placeId ? (
                         <PokePlace placeId={r.placeId} size="card" />
                       ) : r.currentTrack ? (
@@ -99,7 +117,7 @@ export default function LobbyClient() {
                         <span className="placeholder">🎵</span>
                       )}
                       <div className="cover-overlay">
-                        {r.currentTrack ? (
+                        {isLive ? (
                           <span className="live-pill">
                             <span className="dot" />
                             LIVE
@@ -111,38 +129,23 @@ export default function LobbyClient() {
                     </div>
                     <div className="info">
                       <h3>{r.name}</h3>
-                      <div
-                        style={{
-                          fontSize: 11,
-                          color: "var(--text-muted)",
-                          marginBottom: 6,
-                          textTransform: "uppercase",
-                          letterSpacing: "0.06em",
-                          fontWeight: 600,
-                        }}
-                      >
+                      <div className="place-sub">
                         {place ? `${place.name} · ${place.region}` : "no place set"}
                       </div>
-                      <div className="now-line">
-                        {r.currentTrack ? `♫ ${r.currentTrack.title}` : "Nothing playing yet"}
-                      </div>
                       <div className="meta">
-                        <span className="listeners">
-                          {r.avatars.slice(0, 5).map((id) => (
-                            <span key={id} className="a">
-                              <Avatar pokemonId={id} size={22} />
-                            </span>
-                          ))}
-                        </span>
-                        <span
-                          style={{
-                            flex: 1,
-                            minWidth: 0,
-                            whiteSpace: "nowrap",
-                            overflow: "hidden",
-                            textOverflow: "ellipsis",
-                          }}
-                        >
+                        {r.currentTrack && (
+                          <span>{r.currentTrack.title}</span>
+                        )}
+                        {r.avatars.length > 0 && (
+                          <span className="listeners">
+                            {r.avatars.slice(0, 4).map((id, i) => (
+                              <span key={`${id}-${i}`} className="a">
+                                <Avatar pokemonId={id} size={22} />
+                              </span>
+                            ))}
+                          </span>
+                        )}
+                        <span className="others">
                           {r.listenerCount} listening
                         </span>
                       </div>
@@ -222,6 +225,7 @@ function CreateRoomModal({
             onChange={(e) => setName(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Escape") onCancel();
+              if (e.key === "Enter" && name.trim().length >= 2) onCreate(name, placeId);
             }}
           />
 

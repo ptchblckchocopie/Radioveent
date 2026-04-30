@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState, useMemo } from "react";
 import { io, type Socket } from "socket.io-client";
 import type {
   ActivityEvent,
@@ -21,7 +21,7 @@ import ChatPanel from "./ChatPanel";
 import HistoryPanel from "./HistoryPanel";
 import LyricsPanel from "./LyricsPanel";
 import ShareButton from "./ShareButton";
-import pokemonList from "@/lib/pokemon.json";
+import { POKEMON } from "@/lib/pokemon";
 import {
   DndContext,
   closestCenter,
@@ -58,7 +58,7 @@ function setStoredPokemonId(id: number) {
   localStorage.setItem("mq:pokemonId", String(id));
 }
 
-const POKEMON_LIST = pokemonList as { id: number; name: string }[];
+const POKEMON_LIST = POKEMON;
 function randomPokemonId() {
   return POKEMON_LIST[Math.floor(Math.random() * POKEMON_LIST.length)].id;
 }
@@ -105,6 +105,137 @@ const CrownIcon = (
     <path d="M3 7l4 4 5-7 5 7 4-4-2 12H5L3 7z" />
   </svg>
 );
+const PlayCtrlIcon = (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M7 5v14l12-7z" /></svg>
+);
+const PauseCtrlIcon = (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1" /><rect x="14" y="5" width="4" height="14" rx="1" /></svg>
+);
+
+function formatTheaterTime(sec: number): string {
+  if (!Number.isFinite(sec) || sec < 0) return "0:00";
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
+function getTrackGradient(_thumbnail: string): string {
+  // Use a warm gradient that matches the design's pink/purple vibe
+  return "#5865f2 0%, #1e1f22 100%";
+}
+
+// Theater-mode lyrics component — renders 3 lines at most: prev, current (large), next
+function TheaterLyrics({
+  videoId,
+  getCurrentTime,
+  fetchLyrics,
+}: {
+  videoId: string;
+  getCurrentTime: () => number;
+  fetchLyrics: (videoId: string, cb: (resp: { lyrics: { synced: string | null; plain: string | null } | null }) => void) => void;
+}) {
+  const [lyrics, setLyrics] = React.useState<{ synced: string | null; plain: string | null } | null>(null);
+  const [activeIdx, setActiveIdx] = React.useState(-1);
+  const reqIdRef = React.useRef(0);
+
+  React.useEffect(() => {
+    if (!videoId) { setLyrics(null); return; }
+    setLyrics(null);
+    const myReq = ++reqIdRef.current;
+    fetchLyrics(videoId, (resp) => {
+      if (myReq !== reqIdRef.current) return;
+      setLyrics(resp?.lyrics || null);
+    });
+  }, [videoId, fetchLyrics]);
+
+  const syncedLines = React.useMemo(() => {
+    if (!lyrics?.synced) return null;
+    const out: { time: number; text: string }[] = [];
+    for (const raw of lyrics.synced.split(/\r?\n/)) {
+      const re = /\[(\d+):(\d+(?:\.\d+)?)\]/g;
+      const stamps: number[] = [];
+      let lastEnd = 0;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(raw))) {
+        stamps.push(parseInt(m[1], 10) * 60 + parseFloat(m[2]));
+        lastEnd = m.index + m[0].length;
+      }
+      if (stamps.length === 0) continue;
+      const text = raw.slice(lastEnd).trim();
+      for (const t of stamps) out.push({ time: t, text });
+    }
+    out.sort((a, b) => a.time - b.time);
+    return out;
+  }, [lyrics]);
+
+  React.useEffect(() => {
+    if (!syncedLines || syncedLines.length === 0) return;
+    const tick = () => {
+      const t = getCurrentTime();
+      let idx = -1;
+      for (let i = 0; i < syncedLines.length; i++) {
+        if (syncedLines[i].time <= t + 0.25) idx = i;
+        else break;
+      }
+      setActiveIdx(idx);
+    };
+    tick();
+    const iv = setInterval(tick, 250);
+    return () => clearInterval(iv);
+  }, [syncedLines, getCurrentTime]);
+
+  if (!syncedLines || syncedLines.length === 0) {
+    return <div className="theater-lyrics-empty">No synced lyrics available</div>;
+  }
+
+  const prev = activeIdx > 0 ? syncedLines[activeIdx - 1] : null;
+  const curr = activeIdx >= 0 ? syncedLines[activeIdx] : null;
+  const next = activeIdx + 1 < syncedLines.length ? syncedLines[activeIdx + 1] : null;
+
+  return (
+    <div className="theater-lyrics-lines">
+      <div className="theater-line prev">{prev?.text || ""}</div>
+      <div className="theater-line current">{curr?.text || "♪"}</div>
+      <div className="theater-line next">{next?.text || ""}</div>
+    </div>
+  );
+}
+
+function TheaterControls({
+  playing,
+  getCurrentTime,
+  onTogglePlay,
+  onSkip,
+}: {
+  playing: boolean;
+  getCurrentTime: () => number;
+  duration: number;
+  onTogglePlay: () => void;
+  onSkip: () => void;
+}) {
+  const [time, setTime] = React.useState(0);
+  React.useEffect(() => {
+    const tick = () => setTime(getCurrentTime());
+    tick();
+    const iv = setInterval(tick, 250);
+    return () => clearInterval(iv);
+  }, [getCurrentTime]);
+
+  return (
+    <div className="theater-controls">
+      <span className="theater-time">{formatTheaterTime(time)}</span>
+      <div className="theater-btns">
+        <button className="theater-ctrl play" onClick={onTogglePlay}>
+          {playing ? PauseCtrlIcon : PlayCtrlIcon}
+        </button>
+        <button className="theater-ctrl" onClick={onSkip}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M5 5v14l9-7zM16 5h3v14h-3z" /></svg>
+        </button>
+      </div>
+      <span className="theater-time" />
+    </div>
+  );
+}
 
 export default function RoomClient({
   roomId,
@@ -150,10 +281,12 @@ export default function RoomClient({
   const [placeId, setPlaceId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState("");
-  const [rightTab, setRightTab] = useState<"chat" | "history" | "lyrics">("chat");
+  const [rightTab, setRightTab] = useState<"chat" | "history">("chat");
   const [unreadChat, setUnreadChat] = useState(0);
   const [searchOpen, setSearchOpen] = useState(false);
   const [confirmingClear, setConfirmingClear] = useState(false);
+  const [lyricsOpen, setLyricsOpen] = useState(false);
+  const [theaterMode, setTheaterMode] = useState(false);
 
   const socketRef = useRef<Socket | null>(null);
   const playerRef = useRef<AudioPlayerHandle>(null);
@@ -561,6 +694,95 @@ export default function RoomClient({
   const me = users.find((u) => u.id === youUserId);
   const upcomingCount = queue.length;
 
+  // ── Theater mode (full-screen) ──
+  if (theaterMode && current) {
+    return (
+      <div className="theater">
+        {/* Hidden audio player */}
+        {(mode === "synced" || hostUserId === youUserId) && (
+          <div style={{ position: "absolute", width: 0, height: 0, overflow: "hidden" }}>
+            <AudioPlayer
+              ref={playerRef}
+              track={{
+                videoId: current.videoId,
+                title: current.title,
+                thumbnail: current.thumbnail,
+                addedByName: current.addedByName,
+                addedByPokemonId: current.addedByPokemonId,
+              }}
+              playing={playback.playing}
+              positionSec={playback.positionSec}
+              serverUpdatedAt={playback.serverUpdatedAt}
+              shuffle={shuffle}
+              repeat={repeat}
+              hasNext={queue.length > 0 || repeat !== "off"}
+              onTogglePlay={togglePlay}
+              onSkip={skip}
+              onSeek={seek}
+              onToggleShuffle={() => socketRef.current?.emit("set_shuffle", { shuffle: !shuffle })}
+              onCycleRepeat={() => {
+                const next: RepeatMode = repeat === "off" ? "all" : repeat === "all" ? "one" : "off";
+                socketRef.current?.emit("set_repeat", { repeat: next });
+              }}
+              onEnded={handleTrackEnded}
+              fetchAudioUrl={handleFetchAudioUrl}
+            />
+          </div>
+        )}
+
+        {/* Theater header */}
+        <div className="theater-header">
+          <span className="theater-label">
+            <span className="live-dot" />
+            Theater mode · everyone is here
+          </span>
+          <div className="theater-song-info">
+            <div className="theater-song-title">{current.title}</div>
+            <div className="theater-song-artist">
+              {current.addedByName ? `added by ${current.addedByName}` : ""}
+            </div>
+          </div>
+          <button
+            className="theater-exit-btn"
+            onClick={() => setTheaterMode(false)}
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7" />
+            </svg>
+            Exit theater
+          </button>
+        </div>
+
+        {/* Lyrics area */}
+        <div className="theater-lyrics-body">
+          <TheaterLyrics
+            videoId={current.videoId}
+            getCurrentTime={getLyricsCurrentTime}
+            fetchLyrics={handleFetchLyrics}
+          />
+        </div>
+
+        {/* Bottom controls */}
+        <TheaterControls
+          playing={playback.playing}
+          getCurrentTime={getLyricsCurrentTime}
+          duration={0}
+          onTogglePlay={togglePlay}
+          onSkip={skip}
+        />
+
+        <SearchOverlay
+          open={searchOpen}
+          onClose={() => setSearchOpen(false)}
+          onAdd={handleAddVideoId}
+          onAddPlaylist={handleAddPlaylist}
+          search={handleSearch}
+          getStatus={trackStatus}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="app">
       {/* LEFT: users sidebar */}
@@ -769,6 +991,9 @@ export default function RoomClient({
                 const next: RepeatMode = repeat === "off" ? "all" : repeat === "all" ? "one" : "off";
                 socketRef.current?.emit("set_repeat", { repeat: next });
               }}
+              lyricsActive={lyricsOpen}
+              onToggleLyrics={() => setLyricsOpen((v) => !v)}
+              onTheaterMode={() => setTheaterMode(true)}
               onEnded={handleTrackEnded}
               fetchAudioUrl={handleFetchAudioUrl}
             />
@@ -800,6 +1025,42 @@ export default function RoomClient({
           )}
 
           {error && <div style={{ color: "var(--red)", fontSize: 13 }}>{error}</div>}
+
+          {lyricsOpen && current ? (
+            <div className="inline-lyrics">
+              <div className="inline-lyrics-header">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M9 18V5l12-2v13" /><circle cx="6" cy="18" r="3" /><circle cx="18" cy="16" r="3" />
+                </svg>
+                <span className="inline-lyrics-title">Lyrics</span>
+                <span className="inline-lyrics-badge">Synced</span>
+                <div style={{ flex: 1 }} />
+                <button
+                  className="inline-lyrics-icon-btn"
+                  onClick={() => setTheaterMode(true)}
+                  title="Theater mode"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" />
+                  </svg>
+                </button>
+                <button
+                  className="inline-lyrics-icon-btn"
+                  onClick={() => setLyricsOpen(false)}
+                  title="Close lyrics"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M18 6 6 18M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+              <LyricsPanel
+                videoId={current.videoId}
+                getCurrentTime={getLyricsCurrentTime}
+                fetchLyrics={handleFetchLyrics}
+              />
+            </div>
+          ) : (
 
           <div className="queue">
             <div className="queue-header">
@@ -866,6 +1127,8 @@ export default function RoomClient({
               </SortableContext>
             </DndContext>
           </div>
+
+          )}
         </div>
       </main>
 
@@ -887,12 +1150,6 @@ export default function RoomClient({
           >
             {HistoryTabIcon} History
           </button>
-          <button
-            className={`right-tab ${rightTab === "lyrics" ? "active" : ""}`}
-            onClick={() => setRightTab("lyrics")}
-          >
-            {LyricsTabIcon} Lyrics
-          </button>
         </div>
         {rightTab === "chat" ? (
           <ChatPanel
@@ -902,14 +1159,8 @@ export default function RoomClient({
               socketRef.current?.emit("send_chat", { text, imageUrl })
             }
           />
-        ) : rightTab === "history" ? (
-          <HistoryPanel events={activity} />
         ) : (
-          <LyricsPanel
-            videoId={current?.videoId || null}
-            getCurrentTime={getLyricsCurrentTime}
-            fetchLyrics={handleFetchLyrics}
-          />
+          <HistoryPanel events={activity} />
         )}
       </aside>
 

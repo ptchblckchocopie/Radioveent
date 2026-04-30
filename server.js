@@ -29,7 +29,7 @@ const MIME_FOR_EXT = {
 };
 
 const execFileAsync = promisify(execFile);
-const YTDLP_PATH = process.env.YTDLP_PATH || path.join(os.homedir(), ".local/bin/yt-dlp");
+const YTDLP_PATH = process.env.YTDLP_PATH || "yt-dlp";
 
 // videoId -> { url, expiresAt }
 const audioUrlCache = new Map();

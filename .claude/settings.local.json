@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git:*)",
+      "Bash(where yt-dlp:*)",
+      "Bash(npm install:*)",
+      "Bash(npx next:*)",
+      "Bash(where cloudflared:*)"
+    ]
+  }
+}
