@@ -9,7 +9,6 @@ type Props = {
 export default function ShareButton({ inviteUrl, listenerCount }: Props) {
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [toast, setToast] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -24,9 +23,7 @@ export default function ShareButton({ inviteUrl, listenerCount }: Props) {
   const copy = async () => {
     try { await navigator.clipboard.writeText(inviteUrl); } catch {}
     setCopied(true);
-    setToast(true);
     setTimeout(() => setCopied(false), 1800);
-    setTimeout(() => setToast(false), 1600);
   };
 
   const shareToDiscord = () => {
@@ -34,11 +31,11 @@ export default function ShareButton({ inviteUrl, listenerCount }: Props) {
     copy();
   };
   const shareToX = () => {
-    const tweet = encodeURIComponent(`Listening on Veent Radio · ${inviteUrl}`);
+    const tweet = encodeURIComponent(`Listening on Late Night Radio · ${inviteUrl}`);
     window.open(`https://twitter.com/intent/tweet?text=${tweet}`, "_blank");
   };
   const shareViaEmail = () => {
-    const subject = encodeURIComponent("Veent Radio invite");
+    const subject = encodeURIComponent("Late Night Radio invite");
     const body = encodeURIComponent(`Drop in: ${inviteUrl}`);
     window.location.href = `mailto:?subject=${subject}&body=${body}`;
   };
@@ -69,14 +66,12 @@ export default function ShareButton({ inviteUrl, listenerCount }: Props) {
             </svg>
           )}
         </span>
-        <span className="sb-text">{copied ? "Link copied" : "Invite"}</span>
+        <span className="sb-text">{copied ? "Copied!" : "Invite"}</span>
         <span className="sb-trailing">
           <span className="live" />
           {listenerCount}
         </span>
       </button>
-
-      <div className={`share-toast ${toast ? "show" : ""}`}>✓ Copied to clipboard</div>
 
       {open && (
         <div className="share-popover" onClick={(e) => e.stopPropagation()}>
@@ -86,7 +81,7 @@ export default function ShareButton({ inviteUrl, listenerCount }: Props) {
                 <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07L11.7 5.3" />
                 <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
               </svg>
-              Invite to Veent Radio
+              Invite to Late Night Radio
             </h4>
             <p>Anyone with this link can drop in. They'll pick a nickname and Pokémon on arrival.</p>
           </div>

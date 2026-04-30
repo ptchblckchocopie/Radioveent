@@ -561,7 +561,7 @@ body {
   background: var(--bg-tertiary);
   border-radius: var(--radius-sm);
   padding: 6px 10px;
-  width: 320px;
+  flex: 1; min-width: 200px; max-width: 600px;
   color: var(--text-muted);
   cursor: pointer;
   font-size: 13px;
@@ -734,6 +734,7 @@ body {
   transition: all 160ms cubic-bezier(.2,.8,.2,1);
   overflow: hidden;
   position: relative;
+  flex-shrink: 0;
 }
 .share-btn:hover {
   transform: translateY(-1px);
@@ -754,6 +755,7 @@ body {
   display: inline-flex; align-items: center;
   padding: 0 14px 0 12px;
   letter-spacing: 0.01em;
+  white-space: nowrap;
 }
 .share-btn .sb-trailing {
   display: inline-flex; align-items: center; gap: 4px;
@@ -887,18 +889,20 @@ body {
 .share-meta .meta-item { display: inline-flex; align-items: center; gap: 5px; }
 .share-toast {
   position: absolute;
-  top: 8px; left: 50%;
-  transform: translateX(-50%) translateY(-32px);
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%) translateY(6px);
   background: var(--green);
   color: white;
   font-size: 11px; font-weight: 700;
-  padding: 5px 12px;
-  border-radius: 999px;
+  padding: 6px 14px;
+  border-radius: var(--radius-md);
   box-shadow: 0 4px 16px rgba(35,165,89,0.5);
   opacity: 0;
-  letter-spacing: 0.04em; text-transform: uppercase;
+  white-space: nowrap;
   pointer-events: none;
   transition: all 220ms cubic-bezier(.2,.8,.2,1);
+  z-index: 60;
 }
 .share-toast.show {
   opacity: 1;
