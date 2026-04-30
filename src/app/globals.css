@@ -2074,8 +2074,8 @@ svg { display: block; }
 /* ── Mobile tab bar (hidden on desktop) ──────────────────── */
 .mobile-tab-bar { display: none; }
 
-/* ── Mobile panel close button (hidden on desktop) ───────── */
-.mobile-panel-close { display: none; }
+/* ── Mobile panel close button — removed, use tab bar instead ─ */
+.mobile-panel-close { display: none !important; }
 
 /* ── Tablet: ≤1024px ─────────────────────────────────────── */
 @media (max-width: 1024px) {
@@ -2237,6 +2237,17 @@ svg { display: block; }
   }
   .share-popover::before { display: none; }
 
+  /* Emoji picker — full width above chat input */
+  .emoji-picker {
+    position: fixed;
+    bottom: calc(56px + env(safe-area-inset-bottom, 0px) + 64px);
+    left: 8px;
+    right: 8px;
+    width: auto;
+    grid-template-columns: repeat(auto-fill, minmax(36px, 1fr));
+    max-height: 200px;
+  }
+
   /* Inline lyrics */
   .inline-lyrics .lyrics-line { font-size: 14px; }
   .inline-lyrics .lyrics-line.active { font-size: 16px; }
@@ -2309,8 +2320,6 @@ svg { display: block; }
   .search-result .cover { width: 40px; height: 40px; }
   .search-result .title { font-size: 13px; }
 
-  /* Emoji picker */
-  .emoji-picker { grid-template-columns: repeat(7, 32px); }
 
   /* Chat */
   .chat-input { padding: 8px 10px; }
