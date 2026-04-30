@@ -2179,7 +2179,8 @@ svg { display: block; }
   .np-controls { margin-top: 6px; gap: 4px; }
   .np-controls .ctrl { width: 32px; height: 32px; }
   .np-controls .play { width: 40px; height: 40px; }
-  .np-volume { display: none; }
+  .np-volume { margin-left: 0; }
+  .np-volume input[type=range] { width: 80px; }
   .np-progress { margin-top: 6px; }
 
   /* Queue */
@@ -2241,9 +2242,12 @@ svg { display: block; }
   .inline-lyrics .lyrics-line.active { font-size: 16px; }
 
   /* Theater mode */
-  .theater-header { padding: 12px 16px; }
-  .theater-label { font-size: 9px; }
-  .theater-song-title { font-size: 12px; }
+  .theater-header { padding: 10px 12px; flex-wrap: wrap; gap: 6px; }
+  .theater-label { font-size: 8px; order: 1; }
+  .theater-song-info { order: 3; flex-basis: 100%; text-align: left; }
+  .theater-song-title { font-size: 13px; }
+  .theater-song-artist { font-size: 11px; }
+  .theater-exit-btn { order: 2; margin-left: auto; }
   .theater-lyrics-body { padding: 0 24px; }
   .theater-lyrics-stack { --line-h: 60px; }
   .theater-stack-line[data-offset="0"] { font-size: 32px; }
