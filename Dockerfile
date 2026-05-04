@@ -51,6 +51,15 @@ COPY --from=pot-builder /pot/server/build /opt/bgutil-pot/server/build
 COPY --from=pot-builder /pot/server/node_modules /opt/bgutil-pot/server/node_modules
 COPY --from=pot-builder /pot/server/package.json /opt/bgutil-pot/server/package.json
 
+# yt-dlp's PO-token plugin shells out to `node`. The base image has it at
+# /usr/local/bin/node, but DO's runtime occasionally launches the container with a
+# narrower PATH. Symlinking into /usr/bin guarantees it's findable; the explicit ENV
+# PATH below makes that doubly true. The version check fails the build loudly if the
+# base image ever stops shipping node.
+RUN ln -sf /usr/local/bin/node /usr/bin/node \
+ && node --version
+ENV PATH="/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin"
+
 WORKDIR /app
 ENV NODE_ENV=production
 
