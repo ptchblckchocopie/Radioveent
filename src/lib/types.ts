@@ -69,6 +69,7 @@ export interface RoomSnapshot {
   placeId: string | null;
   mode: Mode;
   hostUserId: string | null;
+  creatorUserId: string | null;
   queue: Track[];
   current: Track | null;
   playback: Playback;

@@ -381,6 +381,7 @@ export default function RoomClient({
   // Room state
   const [mode, setMode] = useState<Mode>("synced");
   const [hostUserId, setHostUserId] = useState<string | null>(null);
+  const [creatorUserId, setCreatorUserId] = useState<string | null>(null);
   const [youUserId, setYouUserId] = useState<string>("");
   const [users, setUsers] = useState<User[]>([]);
   const [queue, setQueue] = useState<Track[]>([]);
@@ -418,15 +419,22 @@ export default function RoomClient({
   const socketRef = useRef<Socket | null>(null);
   const playerRef = useRef<AudioPlayerHandle>(null);
 
-  // Restore stored name + Pokémon on mount
+  // Restore stored name + Pokémon on mount. If both are present, the user was
+  // already onboarded via the lobby — skip the join screen and auto-join. Direct
+  // invite-link visitors who land here without any stored identity still see the
+  // join screen, since storedName / storedPid will be empty.
   useEffect(() => {
     const stored = getStoredName();
+    const storedPid = getStoredPokemonId();
     if (stored) {
       setName(stored);
       setNameInput(stored);
     }
-    const storedPid = getStoredPokemonId();
     setPickedPokemonId(storedPid ?? randomPokemonId());
+    if (stored && storedPid) {
+      setPokemonId(storedPid);
+      setJoined(true);
+    }
   }, []);
 
   // Auto-shuffle pokemon if it gets taken
@@ -455,6 +463,7 @@ export default function RoomClient({
     socket.on("room_state", (snap: RoomSnapshot) => {
       setMode(snap.mode);
       setHostUserId(snap.hostUserId);
+      setCreatorUserId(snap.creatorUserId);
       setYouUserId(snap.youUserId);
       setUsers(snap.users);
       setQueue(snap.queue);
@@ -908,6 +917,7 @@ export default function RoomClient({
         <ul className="user-list scroll">
           {users.map((u) => {
             const isHost = u.id === hostUserId && mode === "host";
+            const isCreator = u.id === creatorUserId;
             return (
               <li key={u.id} className={`user-row ${u.id === youUserId ? "me" : ""}`}>
                 <div style={{ position: "relative", display: "inline-flex", flexShrink: 0 }}>
@@ -917,7 +927,11 @@ export default function RoomClient({
                 <div className="user-meta">
                   <div className="name">
                     {u.name}
-                    {isHost && <span className="badge" title="Host">{CrownIcon}</span>}
+                    {isCreator ? (
+                      <span className="badge" title="Creator">{CrownIcon}</span>
+                    ) : isHost ? (
+                      <span className="badge" title="Host">{CrownIcon}</span>
+                    ) : null}
                   </div>
                   <div className="role">
                     {HeadphonesSmall}

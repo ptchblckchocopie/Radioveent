@@ -690,6 +690,7 @@ function getOrCreateRoom(roomId) {
       createdAt: Date.now(),
       mode: "synced",
       hostUserId: null,
+      creatorUserId: null,
       queue: [],
       current: null,
       playback: { playing: false, positionSec: 0, serverUpdatedAt: Date.now() },
@@ -842,6 +843,7 @@ function snapshot(room, youUserId) {
     shuffle: !!room.shuffle,
     repeat: room.repeat || "off",
     hostUserId: room.hostUserId,
+    creatorUserId: room.creatorUserId || null,
     queue: room.queue,
     current: room.current,
     playback: {
@@ -1088,6 +1090,7 @@ app.prepare().then(() => {
         pokemonId: validPokemonId(pokemonId) ? pokemonId : null,
       };
       room.users.set(userId, newUser);
+      if (!room.creatorUserId) room.creatorUserId = userId;
       socketIndex.set(socket.id, { userId, roomId });
       socket.leave(`lobby:${roomId}`);
       socket.join(roomId);
