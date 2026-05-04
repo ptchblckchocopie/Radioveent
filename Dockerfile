@@ -52,7 +52,7 @@ RUN apt-get update \
  && curl -fsSL "https://github.com/windtf/wireproxy/releases/download/v${WIREPROXY_VERSION}/wireproxy_linux_amd64.tar.gz" \
     | tar -xz -C /usr/local/bin wireproxy \
  && chmod +x /usr/local/bin/wireproxy \
- && wgcf --version && wireproxy --version
+ && wgcf help >/dev/null && wireproxy --version
 
 # Generator (built JS + its prod deps). Path is referenced explicitly from server.js
 # via --extractor-args, so it doesn't depend on whatever $HOME resolves to at runtime.
