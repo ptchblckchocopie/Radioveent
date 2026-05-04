@@ -69,6 +69,9 @@ export interface RoomSnapshot {
   placeId: string | null;
   mode: Mode;
   hostUserId: string | null;
+  // userId of the first user to join a fresh room — set once and never
+  // overwritten. Surfaces a "Creator" crown in the listening sidebar.
+  creatorUserId: string | null;
   // userId of whoever's currently sharing their screen via the WebRTC
   // watchparty, or null if no watchparty is active.
   watchPartyHostUserId: string | null;
