@@ -67,14 +67,20 @@ if (!POT_AVAILABLE) {
   console.log(`yt-dlp: bgutil PO-token provider detected (script: ${POT_GENERATOR_PATH}), cookieless extraction enabled`);
 }
 
-// WARP_PROXY_URL is set by entrypoint.sh once the userspace WireGuard tunnel is
-// up. yt-dlp routes through it so YouTube sees a Cloudflare egress IP instead of
-// the DO datacenter one (DO IPs get LOGIN_REQUIRED at the player API).
-const WARP_PROXY_URL = process.env.WARP_PROXY_URL || null;
-if (WARP_PROXY_URL) {
-  console.log(`yt-dlp: routing extraction through WARP proxy ${WARP_PROXY_URL}`);
-} else {
-  console.log("yt-dlp: no WARP proxy set — using direct egress (datacenter IP)");
+// WARP bring-up runs in the background (see entrypoint.sh) so Node can boot
+// immediately for the health check. The proxy URL lands in $WARP_PROXY_FILE
+// once the SOCKS tunnel is verified. Reading it lazily means yt-dlp picks the
+// proxy up on the first extraction after WARP is ready — no restart needed.
+const WARP_PROXY_FILE = process.env.WARP_PROXY_FILE || "/tmp/warp-proxy.url";
+
+function getWarpProxyUrl() {
+  if (process.env.WARP_PROXY_URL) return process.env.WARP_PROXY_URL;
+  try {
+    const v = fs.readFileSync(WARP_PROXY_FILE, "utf8").trim();
+    return v || null;
+  } catch {
+    return null;
+  }
 }
 
 // videoId -> { url, expiresAt }
@@ -519,7 +525,8 @@ async function extractAudioUrl(videoId) {
   // changes month-to-month. Forcing a specific client mix risks excluding the only
   // one that still works at any given time.
   const baseArgs = ["--no-warnings"];
-  if (WARP_PROXY_URL) baseArgs.push("--proxy", WARP_PROXY_URL);
+  const warpProxy = getWarpProxyUrl();
+  if (warpProxy) baseArgs.push("--proxy", warpProxy);
   if (POT_AVAILABLE) {
     // Tell the bgutil plugin where its server dir lives. Plugin IE-key is
     // `youtubepot-bgutilscript`, key is `server_home`, value = dir containing
