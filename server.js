@@ -52,18 +52,19 @@ const YTDLP_PATH = process.env.YTDLP_PATH || "yt-dlp";
 // the bgutil-ytdlp-pot-provider plugin) is the combination that returns plain HTTPS
 // audio URLs from datacenter IPs.
 //
-// The plugin lives at ~/.config/yt-dlp/plugins/bgutil-ytdlp-pot-provider/ and the
-// Node generator at ~/bgutil-ytdlp-pot-provider/server/build/generate_once.js — both
-// are baked into the Dockerfile. If either is missing yt-dlp will hit the bot-wall.
-const POT_GENERATOR_PATH = path.join(os.homedir(), "bgutil-ytdlp-pot-provider/server/build/generate_once.js");
-const POT_PLUGIN_PATH = path.join(os.homedir(), ".config/yt-dlp/plugins/bgutil-ytdlp-pot-provider");
-if (!fs.existsSync(POT_GENERATOR_PATH) || !fs.existsSync(POT_PLUGIN_PATH)) {
+// Paths below match what the Dockerfile installs. They're absolute (not under $HOME)
+// so plugin discovery doesn't depend on which user the container runs as. The script
+// path is passed to yt-dlp explicitly via --extractor-args for the same reason.
+const POT_GENERATOR_PATH = process.env.POT_GENERATOR_PATH || "/opt/bgutil-pot/server/build/generate_once.js";
+const POT_PLUGIN_PATH = process.env.POT_PLUGIN_PATH || "/etc/yt-dlp/plugins/bgutil-ytdlp-pot-provider";
+const POT_AVAILABLE = fs.existsSync(POT_GENERATOR_PATH) && fs.existsSync(POT_PLUGIN_PATH);
+if (!POT_AVAILABLE) {
   console.warn(
-    `yt-dlp: bgutil PO-token provider not installed at ${POT_PLUGIN_PATH} / ${POT_GENERATOR_PATH} — ` +
+    `yt-dlp: bgutil PO-token provider not installed (looked at ${POT_PLUGIN_PATH} and ${POT_GENERATOR_PATH}) — ` +
     "extraction will fail with the YouTube bot-wall error from datacenter IPs."
   );
 } else {
-  console.log("yt-dlp: bgutil PO-token provider detected, cookieless extraction enabled");
+  console.log(`yt-dlp: bgutil PO-token provider detected (script: ${POT_GENERATOR_PATH}), cookieless extraction enabled`);
 }
 
 // videoId -> { url, expiresAt }
@@ -508,6 +509,11 @@ async function extractAudioUrl(videoId) {
   // changes month-to-month. Forcing a specific client mix risks excluding the only
   // one that still works at any given time.
   const baseArgs = ["--no-warnings"];
+  if (POT_AVAILABLE) {
+    // Tell yt-dlp where the bgutil generator lives. The plugin's default uses ~ which
+    // depends on $HOME, but the path passed here is absolute.
+    baseArgs.push("--extractor-args", `youtube:bgutil_pot_script_path=${POT_GENERATOR_PATH}`);
+  }
 
   const url = `https://www.youtube.com/watch?v=${videoId}`;
 
@@ -521,21 +527,24 @@ async function extractAudioUrl(videoId) {
     if (!line) throw new Error("no url in yt-dlp output");
     return line.trim();
   } catch (e) {
-    // Diagnostic: re-run with --list-formats to see what YouTube actually returned.
+    // Diagnostic: re-run with -v --list-formats so we capture the [debug] lines that
+    // tell us whether the bgutil PO-token provider is loaded ("PO Token Providers: ...")
+    // and which plugin dirs yt-dlp searched. Without -v all we get is the user-facing
+    // error message which doesn't say *why* yt-dlp couldn't bypass the bot-wall.
     let diag = "";
     try {
       const { stdout, stderr } = await execFileAsync(
         YTDLP_PATH,
-        ["--list-formats", ...baseArgs, url],
-        { timeout: 20000, maxBuffer: 256 * 1024 }
+        ["-v", "--list-formats", ...baseArgs, url],
+        { timeout: 25000, maxBuffer: 1024 * 1024 }
       );
-      diag = (stdout || stderr || "").slice(0, 1500);
+      diag = (stderr || stdout || "").slice(0, 6000);
     } catch (le) {
-      diag = "list-formats also failed: " + (le?.stderr?.toString().slice(0, 500) || le?.message || le);
+      diag = "list-formats also failed:\n" + ((le?.stderr?.toString() || le?.message || String(le)).slice(0, 6000));
     }
     console.error("yt-dlp extraction failed for", videoId, "\n--- diagnostic ---\n", diag);
     const origStderr = e?.stderr?.toString() || e?.message || String(e);
-    throw new Error(origStderr.slice(0, 400) + "\n--- list-formats ---\n" + diag);
+    throw new Error(origStderr.slice(0, 400) + "\n--- list-formats ---\n" + diag.slice(0, 1200));
   }
 }
 

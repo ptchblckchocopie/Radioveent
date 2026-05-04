@@ -29,7 +29,8 @@ RUN apt-get update \
  && git clone --depth 1 https://github.com/Brainicism/bgutil-ytdlp-pot-provider.git . \
  && cd server \
  && npm ci --no-audit --no-fund \
- && npx tsc
+ && npx tsc \
+ && npm prune --omit=dev
 
 # ── runner: slim image with only prod deps + yt-dlp + ffmpeg + python + pot plugin ─
 FROM node:22-slim AS runner
@@ -39,16 +40,16 @@ RUN apt-get update \
  && curl -fsSL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp \
       -o /usr/local/bin/yt-dlp \
  && chmod +x /usr/local/bin/yt-dlp \
- && pip3 install --break-system-packages --no-cache-dir bgutil-ytdlp-pot-provider \
- && PLUGIN_SITE=$(python3 -c "import site,os; print(next(p for p in site.getsitepackages()+[site.getusersitepackages()] if os.path.isdir(os.path.join(p,'yt_dlp_plugins'))))") \
- && mkdir -p /root/.config/yt-dlp/plugins/bgutil-ytdlp-pot-provider \
- && cp -r "$PLUGIN_SITE/yt_dlp_plugins" /root/.config/yt-dlp/plugins/bgutil-ytdlp-pot-provider/
+ && pip3 install --break-system-packages --no-cache-dir --target /tmp/bgutil-py bgutil-ytdlp-pot-provider \
+ && mkdir -p /etc/yt-dlp/plugins/bgutil-ytdlp-pot-provider \
+ && cp -r /tmp/bgutil-py/yt_dlp_plugins /etc/yt-dlp/plugins/bgutil-ytdlp-pot-provider/ \
+ && rm -rf /tmp/bgutil-py
 
-# Bring the generator (built JS + its prod deps) into the place the plugin looks for.
-COPY --from=pot-builder /pot/server/build /root/bgutil-ytdlp-pot-provider/server/build
-COPY --from=pot-builder /pot/server/package.json /pot/server/package-lock.json /root/bgutil-ytdlp-pot-provider/server/
-RUN cd /root/bgutil-ytdlp-pot-provider/server \
- && npm ci --omit=dev --no-audit --no-fund
+# Generator (built JS + its prod deps). Path is referenced explicitly from server.js
+# via --extractor-args, so it doesn't depend on whatever $HOME resolves to at runtime.
+COPY --from=pot-builder /pot/server/build /opt/bgutil-pot/server/build
+COPY --from=pot-builder /pot/server/node_modules /opt/bgutil-pot/server/node_modules
+COPY --from=pot-builder /pot/server/package.json /opt/bgutil-pot/server/package.json
 
 WORKDIR /app
 ENV NODE_ENV=production
