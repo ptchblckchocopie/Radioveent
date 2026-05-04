@@ -52,13 +52,20 @@ for i in $(seq 1 20); do
   sleep 1
 done
 
+echo "warp: wireproxy log tail (first ${i}s):"
+tail -n 30 /tmp/wireproxy.log || true
+
 if [[ $TUNNEL_OK -eq 1 ]]; then
+  # socks5h:// makes yt-dlp resolve DNS through the proxy too — important so YouTube
+  # only ever sees the WARP egress, never a DO-resolved name.
   echo "warp: tunnel up — SOCKS proxy listening on 127.0.0.1:${SOCKS_PORT}"
-  export WARP_PROXY_URL="socks5://127.0.0.1:${SOCKS_PORT}"
+  export WARP_PROXY_URL="socks5h://127.0.0.1:${SOCKS_PORT}"
+  # Confirm the egress IP we're actually presenting to YouTube — easier to spot
+  # WARP-vs-DO routing problems than reading wireproxy logs.
+  EGRESS_IP=$(curl -s --max-time 3 -x "$WARP_PROXY_URL" https://www.cloudflare.com/cdn-cgi/trace 2>/dev/null | awk -F= '/^ip=/{print $2}')
+  echo "warp: egress IP via proxy = ${EGRESS_IP:-<unknown>}"
 else
-  echo "warp: tunnel FAILED to come up — yt-dlp will run without proxy"
-  echo "warp: wireproxy log tail:"
-  tail -n 20 /tmp/wireproxy.log || true
+  echo "warp: tunnel FAILED to come up — yt-dlp will run without proxy (extraction will likely hit YouTube bot-wall)"
   if ! kill -0 "$WP_PID" 2>/dev/null; then
     echo "warp: wireproxy process exited"
   fi

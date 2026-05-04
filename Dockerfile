@@ -57,6 +57,7 @@ RUN apt-get update \
 # Generator (built JS + its prod deps). Path is referenced explicitly from server.js
 # via --extractor-args, so it doesn't depend on whatever $HOME resolves to at runtime.
 COPY --from=pot-builder /pot/server/build /opt/bgutil-pot/server/build
+COPY --from=pot-builder /pot/server/src /opt/bgutil-pot/server/src
 COPY --from=pot-builder /pot/server/node_modules /opt/bgutil-pot/server/node_modules
 COPY --from=pot-builder /pot/server/package.json /opt/bgutil-pot/server/package.json
 
