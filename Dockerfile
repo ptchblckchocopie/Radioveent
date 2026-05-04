@@ -49,7 +49,7 @@ RUN apt-get update \
  && curl -fsSL "https://github.com/ViRb3/wgcf/releases/download/v${WGCF_VERSION}/wgcf_${WGCF_VERSION}_linux_amd64" \
       -o /usr/local/bin/wgcf \
  && chmod +x /usr/local/bin/wgcf \
- && curl -fsSL "https://github.com/windtf/wireproxy/releases/download/v${WIREPROXY_VERSION}/wireproxy_linux_amd64.tar.gz" \
+ && curl -fsSL "https://github.com/whyvl/wireproxy/releases/download/v${WIREPROXY_VERSION}/wireproxy_linux_amd64.tar.gz" \
     | tar -xz -C /usr/local/bin wireproxy \
  && chmod +x /usr/local/bin/wireproxy \
  && wgcf help >/dev/null && wireproxy --version
