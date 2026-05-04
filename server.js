@@ -67,20 +67,23 @@ if (!POT_AVAILABLE) {
   console.log(`yt-dlp: bgutil PO-token provider detected (script: ${POT_GENERATOR_PATH}), cookieless extraction enabled`);
 }
 
-// WARP bring-up runs in the background (see entrypoint.sh) so Node can boot
-// immediately for the health check. The proxy URL lands in $WARP_PROXY_FILE
-// once the SOCKS tunnel is verified. Reading it lazily means yt-dlp picks the
-// proxy up on the first extraction after WARP is ready — no restart needed.
-const WARP_PROXY_FILE = process.env.WARP_PROXY_FILE || "/tmp/warp-proxy.url";
+// Egress proxy: yt-dlp routes through this so YouTube sees a residential IP
+// instead of the DO datacenter one (DO IPs hit LOGIN_REQUIRED at the player
+// API). Set EGRESS_PROXY_URL on DO to a SOCKS5 URL like
+//   socks5h://user:pass@0.tcp.ngrok.io:12345
+// pointing at a SOCKS proxy on your home machine exposed via ngrok TCP — see
+// scripts/home-egress.sh. Read lazily so a restart isn't needed if the env
+// changes via DO's runtime config.
+function getEgressProxyUrl() {
+  return process.env.EGRESS_PROXY_URL || null;
+}
 
-function getWarpProxyUrl() {
-  if (process.env.WARP_PROXY_URL) return process.env.WARP_PROXY_URL;
-  try {
-    const v = fs.readFileSync(WARP_PROXY_FILE, "utf8").trim();
-    return v || null;
-  } catch {
-    return null;
-  }
+if (getEgressProxyUrl()) {
+  // Don't log credentials if the URL embeds them.
+  const safe = getEgressProxyUrl().replace(/:\/\/[^@]+@/, "://***@");
+  console.log(`yt-dlp: routing extraction through egress proxy ${safe}`);
+} else {
+  console.warn("yt-dlp: EGRESS_PROXY_URL not set — extraction will use DO's egress IP and likely hit YouTube's bot-wall");
 }
 
 // videoId -> { url, expiresAt }
@@ -525,8 +528,8 @@ async function extractAudioUrl(videoId) {
   // changes month-to-month. Forcing a specific client mix risks excluding the only
   // one that still works at any given time.
   const baseArgs = ["--no-warnings"];
-  const warpProxy = getWarpProxyUrl();
-  if (warpProxy) baseArgs.push("--proxy", warpProxy);
+  const egressProxy = getEgressProxyUrl();
+  if (egressProxy) baseArgs.push("--proxy", egressProxy);
   if (POT_AVAILABLE) {
     // Tell the bgutil plugin where its server dir lives. Plugin IE-key is
     // `youtubepot-bgutilscript`, key is `server_home`, value = dir containing
