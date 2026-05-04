@@ -37,7 +37,7 @@ FROM node:22-slim AS runner
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates curl ffmpeg python3 python3-pip unzip libpixman-1-0 libcairo2 libpango-1.0-0 libjpeg62-turbo libgif7 librsvg2-2 \
  && rm -rf /var/lib/apt/lists/* \
- && curl -fsSL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp \
+ && curl -fsSL https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download/yt-dlp \
       -o /usr/local/bin/yt-dlp \
  && chmod +x /usr/local/bin/yt-dlp \
  && pip3 install --break-system-packages --no-cache-dir --target /tmp/bgutil-py bgutil-ytdlp-pot-provider \

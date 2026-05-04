@@ -511,10 +511,18 @@ async function extractAudioUrl(videoId) {
   const baseArgs = ["--no-warnings"];
   if (POT_AVAILABLE) {
     // Tell the bgutil plugin where its server dir lives. Plugin IE-key is
-    // `youtubepot-bgutilscript`, key is `server_home`, and the value points at the
-    // dir that contains build/generate_once.js (NOT at the script itself).
+    // `youtubepot-bgutilscript`, key is `server_home`, value = dir containing
+    // build/generate_once.js. Must be its OWN --extractor-args flag — yt-dlp's
+    // ';' separator in a single flag drops the second key/value silently.
     const serverHome = path.dirname(path.dirname(POT_GENERATOR_PATH));
     baseArgs.push("--extractor-args", `youtubepot-bgutilscript:server_home=${serverHome}`);
+    // Force a client that requires a PO token. On DO datacenter IPs, yt-dlp's default
+    // player_client list (currently "tv,web,…") starts with android_vr-family clients
+    // that DON'T require PO tokens, so the bgutil plugin never gets called and we
+    // hit LOGIN_REQUIRED. `android` requires PO, returns plain HTTPS URLs (not SABR),
+    // and bgutil generates the token. web_safari and android_vr are fallbacks if YouTube
+    // changes android client policy.
+    baseArgs.push("--extractor-args", "youtube:player_client=android,web_safari,android_vr");
   }
 
   const url = `https://www.youtube.com/watch?v=${videoId}`;
