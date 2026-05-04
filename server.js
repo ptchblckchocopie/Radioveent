@@ -693,6 +693,7 @@ function getOrCreateRoom(roomId) {
       createdAt: Date.now(),
       mode: "synced",
       hostUserId: null,
+      watchPartyHostUserId: null,
       queue: [],
       current: null,
       playback: { playing: false, positionSec: 0, serverUpdatedAt: Date.now() },
@@ -845,6 +846,7 @@ function snapshot(room, youUserId) {
     shuffle: !!room.shuffle,
     repeat: room.repeat || "off",
     hostUserId: room.hostUserId,
+    watchPartyHostUserId: room.watchPartyHostUserId || null,
     queue: room.queue,
     current: room.current,
     playback: {
@@ -1022,6 +1024,14 @@ app.prepare().then(() => {
 
   io.on("connection", (socket) => {
     let userId = nanoid(8);
+
+    // Cristian's-algorithm clock sync. Client measures RTT and computes the
+    // skew between its wall clock and ours, then uses serverNow() in playback
+    // extrapolation so all clients converge on the same target position
+    // regardless of how far each user's machine clock drifts from real time.
+    socket.on("time_sync", (_payload, ack) => {
+      if (typeof ack === "function") ack({ serverTs: Date.now() });
+    });
 
     socket.on("subscribe_browse", (_payload, ack) => {
       socket.join("browse");
@@ -1536,6 +1546,63 @@ app.prepare().then(() => {
       });
     });
 
+    // ── Watch party (WebRTC screen-share) ─────────────────────────
+    // Server's role here is purely a signaling relay: we forward offer/answer
+    // SDPs and ICE candidates between the host and each viewer, and we track
+    // who the active screen-share host is so late-joiners can see one is in
+    // progress. The actual media never touches the server.
+    function findSocketIdByUser(roomId, userId) {
+      for (const [sid, ref] of socketIndex.entries()) {
+        if (ref.roomId === roomId && ref.userId === userId) return sid;
+      }
+      return null;
+    }
+
+    socket.on("wp_start", () => {
+      const ref = socketIndex.get(socket.id);
+      if (!ref) return;
+      const room = rooms.get(ref.roomId);
+      if (!room) return;
+      // First-writer-wins: someone else's share takes priority. If the room
+      // already has a host, the requester just gets ignored — no error spam.
+      if (room.watchPartyHostUserId && room.watchPartyHostUserId !== ref.userId) return;
+      room.watchPartyHostUserId = ref.userId;
+      io.to(room.id).emit("wp_started", { hostUserId: ref.userId });
+    });
+
+    socket.on("wp_stop", () => {
+      const ref = socketIndex.get(socket.id);
+      if (!ref) return;
+      const room = rooms.get(ref.roomId);
+      if (!room) return;
+      if (room.watchPartyHostUserId !== ref.userId) return;
+      room.watchPartyHostUserId = null;
+      io.to(room.id).emit("wp_stopped");
+    });
+
+    // Viewer announces "I'm here, send me an offer". Used when a viewer joins
+    // mid-share — the host can't broadcast offers to everyone, it needs each
+    // viewer to identify itself.
+    socket.on("wp_request_offer", () => {
+      const ref = socketIndex.get(socket.id);
+      if (!ref) return;
+      const room = rooms.get(ref.roomId);
+      if (!room || !room.watchPartyHostUserId) return;
+      if (room.watchPartyHostUserId === ref.userId) return; // host can't request from itself
+      const hostSocketId = findSocketIdByUser(ref.roomId, room.watchPartyHostUserId);
+      if (!hostSocketId) return;
+      io.to(hostSocketId).emit("wp_viewer_ready", { viewerUserId: ref.userId });
+    });
+
+    // Generic relay for offer/answer/candidate. {toUserId, payload}.
+    socket.on("wp_signal", ({ toUserId, payload }) => {
+      const ref = socketIndex.get(socket.id);
+      if (!ref || !toUserId) return;
+      const targetSocketId = findSocketIdByUser(ref.roomId, toUserId);
+      if (!targetSocketId) return;
+      io.to(targetSocketId).emit("wp_signal", { fromUserId: ref.userId, payload });
+    });
+
     socket.on("disconnect", () => {
       const ref = socketIndex.get(socket.id);
       socketIndex.delete(socket.id);
@@ -1548,6 +1615,11 @@ app.prepare().then(() => {
         const remaining = Array.from(room.users.keys());
         room.hostUserId = remaining[0] || null;
         broadcastMode(io, room);
+      }
+      // If the screen-share host disconnected, end the watchparty for everyone.
+      if (room.watchPartyHostUserId === ref.userId) {
+        room.watchPartyHostUserId = null;
+        io.to(room.id).emit("wp_stopped");
       }
       if (room.users.size === 0) {
         scheduleCleanup(room.id);

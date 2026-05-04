@@ -69,6 +69,9 @@ export interface RoomSnapshot {
   placeId: string | null;
   mode: Mode;
   hostUserId: string | null;
+  // userId of whoever's currently sharing their screen via the WebRTC
+  // watchparty, or null if no watchparty is active.
+  watchPartyHostUserId: string | null;
   queue: Track[];
   current: Track | null;
   playback: Playback;

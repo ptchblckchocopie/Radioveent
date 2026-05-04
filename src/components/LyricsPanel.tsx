@@ -101,29 +101,40 @@ export default function LyricsPanel({ videoId, getCurrentTime, fetchLyrics, onSe
     [lyrics]
   );
 
-  // Tick every 250ms to update active line
+  // Tick every 100ms to update active line. The previous 250ms cadence meant
+  // two users' ticks could fall up to 250ms apart inside the same beat, so the
+  // same line could appear "active" at noticeably different moments on each
+  // screen. 100ms collapses that jitter to ≤100ms cross-user. Lookahead drops
+  // from 0.25 to 0.10 to match — large lookahead made lines fire early to
+  // hide tick latency, but with a faster tick we don't need to compensate.
   useEffect(() => {
     if (!syncedLines || syncedLines.length === 0) return;
     const tick = () => {
       const t = getCurrentTime();
       let idx = -1;
       for (let i = 0; i < syncedLines.length; i++) {
-        if (syncedLines[i].time <= t + 0.25) idx = i;
+        if (syncedLines[i].time <= t + 0.1) idx = i;
         else break;
       }
       setActiveIdx(idx);
     };
     tick();
-    const interval = setInterval(tick, 250);
+    const interval = setInterval(tick, 100);
     return () => clearInterval(interval);
   }, [syncedLines, getCurrentTime]);
 
-  // Auto-scroll active line to center
+  // Auto-scroll active line to center. Compute via getBoundingClientRect so the
+  // math doesn't depend on .lyrics-scroller being the offsetParent — el.offsetTop
+  // would otherwise resolve against whichever ancestor happens to be positioned,
+  // making the active line land at random scroll positions.
   useEffect(() => {
     const el = lineRefs.current[activeIdx];
     const sc = listRef.current;
     if (!el || !sc) return;
-    const target = el.offsetTop - sc.clientHeight / 2 + el.clientHeight / 2;
+    const elRect = el.getBoundingClientRect();
+    const scRect = sc.getBoundingClientRect();
+    const lineTopWithinContent = elRect.top - scRect.top + sc.scrollTop;
+    const target = lineTopWithinContent - sc.clientHeight / 2 + el.clientHeight / 2;
     sc.scrollTo({ top: Math.max(0, target), behavior: "smooth" });
   }, [activeIdx]);
 
