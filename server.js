@@ -510,9 +510,11 @@ async function extractAudioUrl(videoId) {
   // one that still works at any given time.
   const baseArgs = ["--no-warnings"];
   if (POT_AVAILABLE) {
-    // Tell yt-dlp where the bgutil generator lives. The plugin's default uses ~ which
-    // depends on $HOME, but the path passed here is absolute.
-    baseArgs.push("--extractor-args", `youtube:bgutil_pot_script_path=${POT_GENERATOR_PATH}`);
+    // Tell the bgutil plugin where its server dir lives. Plugin IE-key is
+    // `youtubepot-bgutilscript`, key is `server_home`, and the value points at the
+    // dir that contains build/generate_once.js (NOT at the script itself).
+    const serverHome = path.dirname(path.dirname(POT_GENERATOR_PATH));
+    baseArgs.push("--extractor-args", `youtubepot-bgutilscript:server_home=${serverHome}`);
   }
 
   const url = `https://www.youtube.com/watch?v=${videoId}`;
