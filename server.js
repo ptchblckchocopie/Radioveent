@@ -67,6 +67,16 @@ if (!POT_AVAILABLE) {
   console.log(`yt-dlp: bgutil PO-token provider detected (script: ${POT_GENERATOR_PATH}), cookieless extraction enabled`);
 }
 
+// WARP_PROXY_URL is set by entrypoint.sh once the userspace WireGuard tunnel is
+// up. yt-dlp routes through it so YouTube sees a Cloudflare egress IP instead of
+// the DO datacenter one (DO IPs get LOGIN_REQUIRED at the player API).
+const WARP_PROXY_URL = process.env.WARP_PROXY_URL || null;
+if (WARP_PROXY_URL) {
+  console.log(`yt-dlp: routing extraction through WARP proxy ${WARP_PROXY_URL}`);
+} else {
+  console.log("yt-dlp: no WARP proxy set — using direct egress (datacenter IP)");
+}
+
 // videoId -> { url, expiresAt }
 const audioUrlCache = new Map();
 const AUDIO_URL_TTL_MS = 5 * 60 * 60 * 1000; // 5 hours
@@ -509,6 +519,7 @@ async function extractAudioUrl(videoId) {
   // changes month-to-month. Forcing a specific client mix risks excluding the only
   // one that still works at any given time.
   const baseArgs = ["--no-warnings"];
+  if (WARP_PROXY_URL) baseArgs.push("--proxy", WARP_PROXY_URL);
   if (POT_AVAILABLE) {
     // Tell the bgutil plugin where its server dir lives. Plugin IE-key is
     // `youtubepot-bgutilscript`, key is `server_home`, value = dir containing

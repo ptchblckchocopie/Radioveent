@@ -34,6 +34,8 @@ RUN apt-get update \
 
 # ── runner: slim image with only prod deps + yt-dlp + ffmpeg + python + pot plugin ─
 FROM node:22-slim AS runner
+ARG WGCF_VERSION=2.2.30
+ARG WIREPROXY_VERSION=1.1.2
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates curl ffmpeg python3 python3-pip unzip libpixman-1-0 libcairo2 libpango-1.0-0 libjpeg62-turbo libgif7 librsvg2-2 \
  && rm -rf /var/lib/apt/lists/* \
@@ -43,7 +45,14 @@ RUN apt-get update \
  && pip3 install --break-system-packages --no-cache-dir --target /tmp/bgutil-py bgutil-ytdlp-pot-provider \
  && mkdir -p /etc/yt-dlp/plugins/bgutil-ytdlp-pot-provider \
  && cp -r /tmp/bgutil-py/yt_dlp_plugins /etc/yt-dlp/plugins/bgutil-ytdlp-pot-provider/ \
- && rm -rf /tmp/bgutil-py
+ && rm -rf /tmp/bgutil-py \
+ && curl -fsSL "https://github.com/ViRb3/wgcf/releases/download/v${WGCF_VERSION}/wgcf_${WGCF_VERSION}_linux_amd64" \
+      -o /usr/local/bin/wgcf \
+ && chmod +x /usr/local/bin/wgcf \
+ && curl -fsSL "https://github.com/windtf/wireproxy/releases/download/v${WIREPROXY_VERSION}/wireproxy_linux_amd64.tar.gz" \
+    | tar -xz -C /usr/local/bin wireproxy \
+ && chmod +x /usr/local/bin/wireproxy \
+ && wgcf --version && wireproxy --version
 
 # Generator (built JS + its prod deps). Path is referenced explicitly from server.js
 # via --extractor-args, so it doesn't depend on whatever $HOME resolves to at runtime.
@@ -71,7 +80,9 @@ RUN npm ci --omit=dev
 COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/server.js ./server.js
 COPY --from=builder /app/next.config.js ./next.config.js
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
 
 # DO App Platform sets PORT (typically 8080); server.js honours process.env.PORT.
 EXPOSE 8080
-CMD ["npm", "start"]
+CMD ["/usr/local/bin/entrypoint.sh"]
