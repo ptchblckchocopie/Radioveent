@@ -52,12 +52,13 @@ const YTDLP_PATH = process.env.YTDLP_PATH || "yt-dlp";
 // the bgutil-ytdlp-pot-provider plugin) is the combination that returns plain HTTPS
 // audio URLs from datacenter IPs.
 //
-// bgutil v1.3+ dropped the Node.js "script" provider. It now ships "script-deno"
-// (needs Deno) and "http" (needs a running server). entrypoint.sh starts the HTTP
-// server on $POT_PORT (default 4416); we tell yt-dlp to reach it via extractor-args.
+// bgutil v1.3+ ships three PO-token providers: http, script-node, script-deno.
+// We configure both http (primary — entrypoint.sh starts the server on :4416)
+// and script-node (fallback — runs generate_once.js directly via Node).
 const POT_PLUGIN_PATH = process.env.POT_PLUGIN_PATH || "/etc/yt-dlp/plugins/bgutil-ytdlp-pot-provider";
 const POT_HTTP_PORT = process.env.POT_PORT || "4416";
 const POT_HTTP_BASE = `http://127.0.0.1:${POT_HTTP_PORT}`;
+const POT_SERVER_HOME = process.env.POT_SERVER_HOME || "/opt/bgutil-pot/server";
 const POT_AVAILABLE = fs.existsSync(POT_PLUGIN_PATH);
 if (!POT_AVAILABLE) {
   console.warn(
@@ -65,7 +66,7 @@ if (!POT_AVAILABLE) {
     "extraction will fail with the YouTube bot-wall error from datacenter IPs."
   );
 } else {
-  console.log(`yt-dlp: bgutil PO-token plugin detected, HTTP provider at ${POT_HTTP_BASE}`);
+  console.log(`yt-dlp: bgutil PO-token plugin detected, HTTP=${POT_HTTP_BASE}, script-node=${POT_SERVER_HOME}`);
 }
 
 // Egress proxy: yt-dlp routes through this so YouTube sees a residential IP
@@ -535,11 +536,18 @@ async function extractAudioUrl(videoId) {
   const baseArgs = ["--no-warnings"];
   const egressProxy = getEgressProxyUrl();
   if (egressProxy) baseArgs.push("--proxy", egressProxy);
+
+  // yt-dlp's JS runtime detection (shutil.which) can miss Node when PATH is
+  // narrowed by the container orchestrator. Force it explicitly so JS challenges
+  // and PO-token script-node generation work.
+  baseArgs.push("--js-runtimes", "node");
+
   if (POT_AVAILABLE) {
-    // Point yt-dlp's bgutil:http provider at the HTTP server started by entrypoint.sh.
-    // Must be its OWN --extractor-args flag — yt-dlp's ';' separator in a single flag
-    // drops the second key/value silently.
+    // Configure BOTH PO-token providers — http (primary) and script-node (fallback).
+    // Each needs its OWN --extractor-args flag; yt-dlp's ';' separator in a single
+    // flag drops the second key/value silently.
     baseArgs.push("--extractor-args", `youtubepot-bgutilhttp:base_url=${POT_HTTP_BASE}`);
+    baseArgs.push("--extractor-args", `youtubepot-bgutilscriptnode:server_home=${POT_SERVER_HOME}`);
     // Force a client that requires a PO token. On DO datacenter IPs, yt-dlp's default
     // player_client list (currently "tv,web,…") starts with android_vr-family clients
     // that DON'T require PO tokens, so the bgutil plugin never gets called and we
@@ -551,11 +559,19 @@ async function extractAudioUrl(videoId) {
 
   const url = `https://www.youtube.com/watch?v=${videoId}`;
 
+  // Ensure yt-dlp inherits a PATH that includes Node — DO's runtime can narrow
+  // the PATH so yt-dlp's shutil.which('node') fails with "JS runtimes: none".
+  const ytdlpEnv = { ...process.env };
+  if (!ytdlpEnv.PATH || !ytdlpEnv.PATH.includes("/usr/local/bin")) {
+    ytdlpEnv.PATH = `/usr/local/bin:/usr/bin:/bin${ytdlpEnv.PATH ? `:${ytdlpEnv.PATH}` : ""}`;
+  }
+  const execOpts = { timeout: 20000, maxBuffer: 1024 * 1024, env: ytdlpEnv };
+
   try {
     const { stdout } = await execFileAsync(
       YTDLP_PATH,
       ["-f", "bestaudio/best", "-g", ...baseArgs, url],
-      { timeout: 20000, maxBuffer: 1024 * 1024 }
+      execOpts
     );
     const line = stdout.split("\n").find((l) => l.startsWith("http"));
     if (!line) throw new Error("no url in yt-dlp output");
@@ -570,7 +586,7 @@ async function extractAudioUrl(videoId) {
       const { stdout, stderr } = await execFileAsync(
         YTDLP_PATH,
         ["-v", "--list-formats", ...baseArgs, url],
-        { timeout: 25000, maxBuffer: 1024 * 1024 }
+        { ...execOpts, timeout: 25000 }
       );
       diag = (stderr || stdout || "").slice(0, 6000);
     } catch (le) {

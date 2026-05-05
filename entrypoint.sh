@@ -45,7 +45,8 @@ if [[ -f "$POT_SERVER_DIR/build/main.js" ]]; then
   ( cd "$POT_SERVER_DIR" && node build/main.js --port "$POT_PORT" ) &
   POT_PID=$!
   for _ in $(seq 1 15); do
-    if curl -sf "http://127.0.0.1:${POT_PORT}/" >/dev/null 2>&1; then
+    # Server may not have a root handler; check TCP connectivity instead.
+    if (echo >/dev/tcp/127.0.0.1/"$POT_PORT") 2>/dev/null; then
       echo "pot: HTTP server ready on :${POT_PORT} (pid=$POT_PID)"
       break
     fi
