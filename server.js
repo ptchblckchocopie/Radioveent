@@ -542,19 +542,14 @@ async function extractAudioUrl(videoId) {
   // and PO-token script-node generation work.
   baseArgs.push("--js-runtimes", "node");
 
-  if (POT_AVAILABLE) {
-    // Configure BOTH PO-token providers — http (primary) and script (fallback).
-    // The script key is shared by script-node and script-deno; yt-dlp picks the
-    // available runtime automatically. Each needs its OWN --extractor-args flag;
-    // yt-dlp's ';' separator in a single flag drops the second key/value silently.
+  if (POT_AVAILABLE && !egressProxy) {
+    // Configure PO-token providers only when there's NO residential egress proxy.
+    // Residential IPs bypass YouTube's bot-wall without PO tokens, and token
+    // generation via script-node adds 10-20s. The bgutil HTTP provider also
+    // breaks when --proxy routes its localhost request through the SOCKS tunnel
+    // (hits 127.0.0.1:4416 on the HOME machine where nothing listens).
     baseArgs.push("--extractor-args", `youtubepot-bgutilhttp:base_url=${POT_HTTP_BASE}`);
     baseArgs.push("--extractor-args", `youtubepot-bgutilscript:server_home=${POT_SERVER_HOME}`);
-    // DON'T force specific player clients. With a residential egress IP (via
-    // Tailscale), yt-dlp's default client selection should work — it adapts to
-    // YouTube's anti-bot changes month-to-month. Forcing android/web_safari/
-    // android_vr broke extraction when those clients started requiring login
-    // regardless of PO tokens. The bgutil providers are still configured so
-    // yt-dlp can generate PO tokens if any default client needs one.
   }
 
   const url = `https://www.youtube.com/watch?v=${videoId}`;
@@ -569,7 +564,7 @@ async function extractAudioUrl(videoId) {
     ytdlpEnv.PATH = `/usr/local/bin:/usr/bin:/bin${ytdlpEnv.PATH ? `:${ytdlpEnv.PATH}` : ""}`;
   }
   ytdlpEnv.no_proxy = "127.0.0.1,localhost,::1";
-  const execOpts = { timeout: 45000, maxBuffer: 1024 * 1024, env: ytdlpEnv };
+  const execOpts = { timeout: 60000, maxBuffer: 1024 * 1024, env: ytdlpEnv };
 
   try {
     const { stdout } = await execFileAsync(
@@ -598,7 +593,7 @@ async function extractAudioUrl(videoId) {
     }
     console.error("yt-dlp extraction failed for", videoId, "\n--- diagnostic ---\n", diag);
     const origStderr = e?.stderr?.toString() || e?.message || String(e);
-    throw new Error(origStderr.slice(0, 400) + "\n--- list-formats ---\n" + diag.slice(0, 1200));
+    throw new Error(origStderr.slice(0, 600) + "\n--- list-formats ---\n" + diag.slice(0, 3000));
   }
 }
 
