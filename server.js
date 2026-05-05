@@ -575,10 +575,23 @@ async function extractAudioUrl(videoId) {
     if (!line) throw new Error("no url in yt-dlp output");
     return line.trim();
   } catch (e) {
+    // Log the PRIMARY extraction error (stderr + stdout + message) so we can
+    // see the actual YouTube error (e.g. "Sign in to confirm", "bot", etc.)
+    // rather than just the Node "Command failed:" wrapper.
+    const primaryStderr = e?.stderr?.toString() || "";
+    const primaryStdout = e?.stdout?.toString() || "";
+    const primaryMsg = e?.message || String(e);
+    const killed = e?.killed ? " [KILLED/TIMEOUT]" : "";
+    console.error(
+      `yt-dlp extraction failed for ${videoId}${killed}`,
+      "\n--- stderr ---\n", primaryStderr.slice(0, 3000) || "(empty)",
+      "\n--- stdout ---\n", primaryStdout.slice(0, 1000) || "(empty)",
+      "\n--- message ---\n", primaryMsg.slice(0, 500)
+    );
+
     // Diagnostic: re-run with -v --list-formats so we capture the [debug] lines that
     // tell us whether the bgutil PO-token provider is loaded ("PO Token Providers: ...")
-    // and which plugin dirs yt-dlp searched. Without -v all we get is the user-facing
-    // error message which doesn't say *why* yt-dlp couldn't bypass the bot-wall.
+    // and which plugin dirs yt-dlp searched.
     let diag = "";
     try {
       const { stdout, stderr } = await execFileAsync(
@@ -590,9 +603,9 @@ async function extractAudioUrl(videoId) {
     } catch (le) {
       diag = "list-formats also failed:\n" + ((le?.stderr?.toString() || le?.message || String(le)).slice(0, 6000));
     }
-    console.error("yt-dlp extraction failed for", videoId, "\n--- diagnostic ---\n", diag);
-    const origStderr = e?.stderr?.toString() || e?.message || String(e);
-    throw new Error(origStderr.slice(0, 600) + "\n--- list-formats ---\n" + diag.slice(0, 3000));
+    console.error("--- diagnostic ---\n", diag);
+    const errorDetail = primaryStderr || primaryMsg;
+    throw new Error(errorDetail.slice(0, 600) + "\n--- list-formats ---\n" + diag.slice(0, 3000));
   }
 }
 
