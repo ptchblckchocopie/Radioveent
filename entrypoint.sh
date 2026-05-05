@@ -16,6 +16,35 @@ WARP_URL_FILE="${WARP_URL_FILE:-/tmp/warp-proxy.url}"
 rm -f "$WARP_URL_FILE"
 export WARP_URL_FILE
 
+# ── bgutil PO-token HTTP server ──────────────────────────────────────────────
+# The bgutil yt-dlp plugin (v1.3+) dropped its Node.js "script" provider and
+# now requires either Deno ("script-deno") or a running HTTP server ("http").
+# We start the HTTP server here so yt-dlp's bgutil:http provider can reach it
+# at http://127.0.0.1:4416 during audio extraction.
+POT_SERVER_DIR="/opt/bgutil-pot/server"
+POT_PORT="${POT_PORT:-4416}"
+
+pot_server_bringup() {
+  if [[ ! -f "$POT_SERVER_DIR/build/main.js" ]]; then
+    echo "pot: bgutil server not found at $POT_SERVER_DIR/build/main.js — skipping"
+    return 0
+  fi
+  echo "pot: starting bgutil PO-token HTTP server on :${POT_PORT}..."
+  cd "$POT_SERVER_DIR"
+  node build/main.js --port "$POT_PORT" &
+  local PID=$!
+  for i in $(seq 1 15); do
+    if curl -sf "http://127.0.0.1:${POT_PORT}/" >/dev/null 2>&1; then
+      echo "pot: HTTP server ready on :${POT_PORT} (pid=$PID)"
+      return 0
+    fi
+    sleep 1
+  done
+  echo "pot: WARNING — HTTP server not ready after 15s (pid=$PID), extraction may fail"
+}
+
+pot_server_bringup
+
 if [[ "${WARP_DISABLE:-0}" == "1" ]]; then
   echo "warp: WARP_DISABLE=1 set, skipping tunnel"
   cd /app
