@@ -85,9 +85,37 @@ function getEgressProxyUrl() {
 }
 
 if (getEgressProxyUrl()) {
-  // Don't log credentials if the URL embeds them.
   const safe = getEgressProxyUrl().replace(/:\/\/[^@]+@/, "://***@");
   console.log(`yt-dlp: routing extraction through egress proxy ${safe} (--proxy http, POT via script-node)`);
+
+  // Startup connectivity tests
+  const { exec } = require("child_process");
+
+  // 1. Can curl reach YouTube through the proxy?
+  exec(
+    `curl -x "${getEgressProxyUrl()}" -s -o /dev/null -w "%{http_code}" --connect-timeout 10 https://www.youtube.com`,
+    { timeout: 15000 },
+    (err, stdout) => {
+      if (err) {
+        console.error(`STARTUP TEST 1 (curl via proxy): FAILED — ${err.killed ? "TIMEOUT" : err.message}`);
+      } else {
+        console.log(`STARTUP TEST 1 (curl via proxy): HTTP ${stdout.trim()}`);
+      }
+    }
+  );
+
+  // 2. Can yt-dlp reach YouTube through the proxy? (just fetch title, no audio)
+  exec(
+    `yt-dlp --proxy "${getEgressProxyUrl()}" --print title -v --no-warnings https://www.youtube.com/watch?v=dQw4w9WgXcQ 2>&1 | head -30`,
+    { timeout: 30000 },
+    (err, stdout) => {
+      if (err) {
+        console.error(`STARTUP TEST 2 (yt-dlp via proxy): FAILED — ${err.killed ? "TIMEOUT" : err.message}`);
+      } else {
+        console.log(`STARTUP TEST 2 (yt-dlp via proxy):\n${(stdout || "").slice(0, 1500)}`);
+      }
+    }
+  );
 } else {
   console.warn("yt-dlp: EGRESS_PROXY_URL not set — extraction will use DO's egress IP and likely hit YouTube's bot-wall");
 }
