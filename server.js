@@ -71,9 +71,10 @@ if (!POT_AVAILABLE) {
 // Egress proxy: yt-dlp routes through this so YouTube sees a residential IP
 // instead of the DO datacenter one (DO IPs hit LOGIN_REQUIRED at the player
 // API). Set EGRESS_PROXY_URL on DO to a SOCKS5 URL like
-//   socks5h://user:pass@0.tcp.ngrok.io:12345
-// pointing at a SOCKS proxy on your home machine exposed via ngrok TCP — see
-// scripts/home-egress.sh. Read lazily so a restart isn't needed if the env
+//   socks5h://user:pass@100.x.x.x:1080
+// pointing at microsocks on the home machine, reached over the Tailscale
+// tailnet that the container joins via TS_AUTHKEY (see entrypoint.sh and
+// scripts/home-egress.sh). Read lazily so a restart isn't needed if the env
 // changes via DO's runtime config.
 function getEgressProxyUrl() {
   return process.env.EGRESS_PROXY_URL || null;

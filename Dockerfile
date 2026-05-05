@@ -33,10 +33,12 @@ RUN apt-get update \
  && npm prune --omit=dev
 
 # ── runner: slim image with only prod deps + yt-dlp + ffmpeg + python + pot plugin ─
-# Egress is supplied externally via EGRESS_PROXY_URL (a SOCKS5 URL pointing at
-# a home-machine proxy reached over ngrok TCP), so we no longer install wgcf /
-# wireproxy here — DO App Platform's sandbox forbids the bind() they need.
+# Egress is supplied via Tailscale: the container joins a tailnet using TS_AUTHKEY
+# and dials microsocks running on the home machine via EGRESS_PROXY_URL. Tailscale's
+# userspace-networking mode is what makes this work in DO App Platform's sandbox
+# (no /dev/net/tun, no CAP_NET_ADMIN).
 FROM node:22-slim AS runner
+ARG TS_VERSION=1.80.0
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates curl ffmpeg python3 python3-pip libpixman-1-0 libcairo2 libpango-1.0-0 libjpeg62-turbo libgif7 librsvg2-2 \
  && rm -rf /var/lib/apt/lists/* \
@@ -46,7 +48,12 @@ RUN apt-get update \
  && pip3 install --break-system-packages --no-cache-dir --target /tmp/bgutil-py bgutil-ytdlp-pot-provider \
  && mkdir -p /etc/yt-dlp/plugins/bgutil-ytdlp-pot-provider \
  && cp -r /tmp/bgutil-py/yt_dlp_plugins /etc/yt-dlp/plugins/bgutil-ytdlp-pot-provider/ \
- && rm -rf /tmp/bgutil-py
+ && rm -rf /tmp/bgutil-py \
+ && TS_ARCH=$(dpkg --print-architecture) \
+ && curl -fsSL "https://pkgs.tailscale.com/stable/tailscale_${TS_VERSION}_${TS_ARCH}.tgz" -o /tmp/ts.tgz \
+ && tar -C /tmp -xzf /tmp/ts.tgz \
+ && mv "/tmp/tailscale_${TS_VERSION}_${TS_ARCH}/tailscale" "/tmp/tailscale_${TS_VERSION}_${TS_ARCH}/tailscaled" /usr/local/bin/ \
+ && rm -rf /tmp/ts.tgz "/tmp/tailscale_${TS_VERSION}_${TS_ARCH}"
 
 # Generator (built JS + its prod deps). Path is referenced explicitly from server.js
 # via --extractor-args, so it doesn't depend on whatever $HOME resolves to at runtime.
