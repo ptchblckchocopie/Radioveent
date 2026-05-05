@@ -20,6 +20,7 @@ import Avatar from "./Avatar";
 import ChatPanel from "./ChatPanel";
 import HistoryPanel from "./HistoryPanel";
 import LyricsPanel from "./LyricsPanel";
+import WatchParty from "./WatchParty";
 import ShareButton from "./ShareButton";
 import VeentLogo from "./VeentLogo";
 import { POKEMON } from "@/lib/pokemon";
@@ -179,13 +180,13 @@ function TheaterLyrics({
       const t = getCurrentTime();
       let idx = -1;
       for (let i = 0; i < syncedLines.length; i++) {
-        if (syncedLines[i].time <= t + 0.25) idx = i;
+        if (syncedLines[i].time <= t + 0.1) idx = i;
         else break;
       }
       setActiveIdx(idx);
     };
     tick();
-    const iv = setInterval(tick, 250);
+    const iv = setInterval(tick, 100);
     return () => clearInterval(iv);
   }, [syncedLines, getCurrentTime]);
 
@@ -393,6 +394,7 @@ export default function RoomClient({
   });
   const [shuffle, setShuffle] = useState(false);
   const [repeat, setRepeat] = useState<RepeatMode>("off");
+  const [watchPartyHostUserId, setWatchPartyHostUserId] = useState<string | null>(null);
 
   // UI state
   const [error, setError] = useState<string | null>(null);
@@ -418,6 +420,14 @@ export default function RoomClient({
 
   const socketRef = useRef<Socket | null>(null);
   const playerRef = useRef<AudioPlayerHandle>(null);
+
+  // Estimated skew between this client's wall clock and the server's, in ms.
+  // serverNow() = Date.now() - clockOffsetRef.current. Refreshed periodically
+  // from "time_sync" pings — keeps all clients aligned on the same target
+  // playback position regardless of local clock drift (which can be seconds
+  // off on machines without good NTP).
+  const clockOffsetRef = useRef(0);
+  const serverNow = useCallback(() => Date.now() - clockOffsetRef.current, []);
 
   // Restore stored name + Pokémon on mount. If both are present, the user was
   // already onboarded via the lobby — skip the join screen and auto-join. Direct
@@ -457,7 +467,33 @@ export default function RoomClient({
     const socket = io({ path: "/socket.io" });
     socketRef.current = socket;
 
-    socket.on("connect", () => setConnected(true));
+    socket.on("connect", () => {
+      setConnected(true);
+      // Burst-sync the clock right after connect, then refresh slowly. We send
+      // 5 rapid pings and keep the offset from the sample with the lowest RTT
+      // (closest to symmetric one-way delay, so the (a+b)/2 estimate is most
+      // accurate). Without this every client extrapolates positions using its
+      // own wall clock, and any NTP drift becomes audible desync.
+      const oneSync = () => {
+        const t0 = Date.now();
+        socket.emit("time_sync", null, (resp: { serverTs: number } | undefined) => {
+          if (!resp || typeof resp.serverTs !== "number") return;
+          const t1 = Date.now();
+          const rtt = t1 - t0;
+          // Server's wall clock at our t1 ≈ serverTs + rtt/2. Offset is how far
+          // ahead our clock is vs the server's: positive → our clock is ahead.
+          const offset = t1 - (resp.serverTs + rtt / 2);
+          // Keep the lowest-RTT sample within the burst (jitter biases samples
+          // with longer RTT toward asymmetric delay, so we trust short ones more).
+          if (rtt < bestRtt) {
+            bestRtt = rtt;
+            clockOffsetRef.current = offset;
+          }
+        });
+      };
+      let bestRtt = Infinity;
+      for (let i = 0; i < 5; i++) setTimeout(oneSync, i * 80);
+    });
     socket.on("disconnect", () => setConnected(false));
 
     socket.on("room_state", (snap: RoomSnapshot) => {
@@ -475,6 +511,13 @@ export default function RoomClient({
       setPlaceId(snap.placeId || null);
       setShuffle(!!snap.shuffle);
       setRepeat(snap.repeat || "off");
+      setWatchPartyHostUserId(snap.watchPartyHostUserId || null);
+    });
+    socket.on("wp_started", ({ hostUserId }: { hostUserId: string }) => {
+      setWatchPartyHostUserId(hostUserId);
+    });
+    socket.on("wp_stopped", () => {
+      setWatchPartyHostUserId(null);
     });
     socket.on("room_place_updated", ({ placeId }: { placeId: string | null }) => {
       setPlaceId(placeId);
@@ -517,7 +560,28 @@ export default function RoomClient({
       setTakenIds(Array.isArray(ids) ? ids : []);
     });
 
+    // Refresh the clock-offset estimate every 30s so we track NTP corrections
+    // and machine-suspend skews over a long session.
+    const resyncInterval = setInterval(() => {
+      let bestRtt = Infinity;
+      const oneSync = () => {
+        const t0 = Date.now();
+        socket.emit("time_sync", null, (resp: { serverTs: number } | undefined) => {
+          if (!resp || typeof resp.serverTs !== "number") return;
+          const t1 = Date.now();
+          const rtt = t1 - t0;
+          const offset = t1 - (resp.serverTs + rtt / 2);
+          if (rtt < bestRtt) {
+            bestRtt = rtt;
+            clockOffsetRef.current = offset;
+          }
+        });
+      };
+      for (let i = 0; i < 3; i++) setTimeout(oneSync, i * 80);
+    }, 30000);
+
     return () => {
+      clearInterval(resyncInterval);
       socket.disconnect();
       socketRef.current = null;
     };
@@ -689,9 +753,9 @@ export default function RoomClient({
     if (typeof local === "number" && local > 0) return local;
     const p = playbackRef.current;
     return p.playing
-      ? p.positionSec + (Date.now() - p.serverUpdatedAt) / 1000
+      ? p.positionSec + (serverNow() - p.serverUpdatedAt) / 1000
       : p.positionSec;
-  }, []);
+  }, [serverNow]);
   const trackStatus = useCallback(
     (videoId: string): TrackStatus => {
       if (current?.videoId === videoId) return "playing";
@@ -1034,6 +1098,48 @@ export default function RoomClient({
               Host
             </button>
           </div>
+          <button
+            type="button"
+            onClick={() => {
+              if (watchPartyHostUserId === youUserId) {
+                socketRef.current?.emit("wp_stop");
+              } else if (!watchPartyHostUserId) {
+                socketRef.current?.emit("wp_start");
+              }
+            }}
+            disabled={!!watchPartyHostUserId && watchPartyHostUserId !== youUserId}
+            title={
+              watchPartyHostUserId === youUserId
+                ? "Stop sharing your screen"
+                : watchPartyHostUserId
+                ? `${users.find((u) => u.id === watchPartyHostUserId)?.name || "Someone"} is sharing — only one host at a time`
+                : "Share your screen with the room"
+            }
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              background: watchPartyHostUserId === youUserId ? "var(--red, #ef4444)" : "var(--bg-tertiary, #2b2d31)",
+              color: "white",
+              border: "1px solid var(--border, rgba(255,255,255,0.08))",
+              borderRadius: 8,
+              padding: "6px 12px",
+              fontSize: 12,
+              fontWeight: 600,
+              cursor: !!watchPartyHostUserId && watchPartyHostUserId !== youUserId ? "not-allowed" : "pointer",
+              opacity: !!watchPartyHostUserId && watchPartyHostUserId !== youUserId ? 0.55 : 1,
+            }}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="2" y="4" width="20" height="14" rx="2" />
+              <path d="M8 21h8M12 18v3" />
+            </svg>
+            {watchPartyHostUserId === youUserId
+              ? "Stop sharing"
+              : watchPartyHostUserId
+              ? "Watch party live"
+              : "Watch Party"}
+          </button>
           <button className="search-trigger" onClick={() => setSearchOpen(true)}>
             {SearchIcon}
             <span>Search a song or paste a link</span>
@@ -1087,6 +1193,18 @@ export default function RoomClient({
             </div>
           )}
 
+          <WatchParty
+            socket={socketRef.current}
+            watchPartyHostUserId={watchPartyHostUserId}
+            youUserId={youUserId}
+            onLocalCaptureEnded={() => socketRef.current?.emit("wp_stop")}
+          />
+
+          {/* When watchparty is live, hide music UI but keep AudioPlayer mounted
+              (display:none doesn't pause <audio>) so background music keeps
+              playing if the host wants both. Queue/lyrics are unmounted entirely
+              since they're pure UI. */}
+          <div style={{ display: watchPartyHostUserId ? "none" : "contents" }}>
           {(mode === "synced" || hostUserId === youUserId) && (
             <AudioPlayer
               ref={playerRef}
@@ -1104,6 +1222,7 @@ export default function RoomClient({
               playing={playback.playing}
               positionSec={playback.positionSec}
               serverUpdatedAt={playback.serverUpdatedAt}
+              serverNow={serverNow}
               shuffle={shuffle}
               repeat={repeat}
               hasNext={queue.length > 0 || repeat !== "off"}
@@ -1151,8 +1270,9 @@ export default function RoomClient({
           )}
 
           {error && <div style={{ color: "var(--red)", fontSize: 13 }}>{error}</div>}
+          </div>
 
-          {lyricsOpen && current ? (
+          {!watchPartyHostUserId && (lyricsOpen && current ? (
             <div className="inline-lyrics">
               <div className="inline-lyrics-header">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -1258,7 +1378,7 @@ export default function RoomClient({
             </DndContext>
           </div>
 
-          )}
+          ))}
         </div>
       </main>
 

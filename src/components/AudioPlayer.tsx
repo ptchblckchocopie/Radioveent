@@ -15,6 +15,11 @@ type Props = {
   playing: boolean;
   positionSec: number;
   serverUpdatedAt: number;
+  // Returns the server's wall-clock time (ms), corrected for this client's
+  // clock skew. Used in the sync math so all clients converge on the same
+  // target playback position regardless of how badly each user's machine
+  // clock is offset from real time.
+  serverNow: () => number;
   shuffle: boolean;
   repeat: "off" | "one" | "all";
   hasNext: boolean;
@@ -121,6 +126,7 @@ const AudioPlayer = forwardRef<AudioPlayerHandle, Props>(function AudioPlayer(
     playing,
     positionSec,
     serverUpdatedAt,
+    serverNow,
     shuffle,
     repeat,
     hasNext,
@@ -209,9 +215,13 @@ const AudioPlayer = forwardRef<AudioPlayerHandle, Props>(function AudioPlayer(
     if (audio.readyState < 1 /* HAVE_METADATA */) return;
     const ts = effectiveServerTs(positionSec, serverUpdatedAt);
     const target = playing
-      ? positionSec + (Date.now() - ts) / 1000
+      ? positionSec + (serverNow() - ts) / 1000
       : positionSec;
-    if (Number.isFinite(target) && Math.abs(audio.currentTime - target) > 0.6) {
+    // 0.25s tolerance: tighter than the previous 0.6s so cross-user drift stays
+    // below the perceptual asynchrony threshold (~100ms is "tight", 250ms is
+    // still well within "feels in sync" territory). Sub-200ms seeks are usually
+    // glitch-free on modern browsers because the buffer already covers them.
+    if (Number.isFinite(target) && Math.abs(audio.currentTime - target) > 0.25) {
       try { audio.currentTime = Math.max(0, target); } catch {}
     }
     if (playing && audio.paused) {
@@ -245,10 +255,13 @@ const AudioPlayer = forwardRef<AudioPlayerHandle, Props>(function AudioPlayer(
       const seekAndPlay = () => {
         const { playing: p, positionSec: pos, serverUpdatedAt: ts } = stateRef.current;
         const isFreshStart = pos < 0.5;
-        const startSec = (p && !isFreshStart) ? pos + (Date.now() - ts) / 1000 : pos;
+        const startSec = (p && !isFreshStart) ? pos + (serverNow() - ts) / 1000 : pos;
         try { audio.currentTime = Math.max(0, startSec); } catch {}
         if (isFreshStart && p) {
-          localAnchorRef.current = { effectiveTs: Date.now(), positionSec: pos, serverUpdatedAt: ts };
+          // localAnchorRef stores wall-clock timestamps that are compared against
+          // serverUpdatedAt later; keep it on the server-time axis so the two
+          // sides of the comparison are commensurate.
+          localAnchorRef.current = { effectiveTs: serverNow(), positionSec: pos, serverUpdatedAt: ts };
         }
         if (p) audio.play().catch(() => setNeedsTap(true));
       };
@@ -314,15 +327,18 @@ const AudioPlayer = forwardRef<AudioPlayerHandle, Props>(function AudioPlayer(
     if (positionSec < 0.5) {
       lastEndedFiredFor.current = null;
       if (playing) {
-        localAnchorRef.current = { effectiveTs: Date.now(), positionSec, serverUpdatedAt };
+        localAnchorRef.current = { effectiveTs: serverNow(), positionSec, serverUpdatedAt };
       }
     }
   }, [positionSec, serverUpdatedAt, playing]);
 
-  // Drift correction every 5s while playing
+  // Drift correction every 1.5s while playing. Combined with the 0.25s tolerance
+  // above, worst-case cross-user desync stays under ~250ms before being snapped
+  // back. Faster than this risks visible scrubber jitter from the constant micro-
+  // seeks; slower lets noticeable drift accumulate between checks.
   useEffect(() => {
     if (!playing) return;
-    const interval = setInterval(() => applyState(), 5000);
+    const interval = setInterval(() => applyState(), 1500);
     return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playing, positionSec, serverUpdatedAt]);

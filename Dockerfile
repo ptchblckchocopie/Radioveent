@@ -33,11 +33,12 @@ RUN apt-get update \
  && npm prune --omit=dev
 
 # ── runner: slim image with only prod deps + yt-dlp + ffmpeg + python + pot plugin ─
+# Egress is supplied externally via EGRESS_PROXY_URL (a SOCKS5 URL pointing at
+# a home-machine proxy reached over ngrok TCP), so we no longer install wgcf /
+# wireproxy here — DO App Platform's sandbox forbids the bind() they need.
 FROM node:22-slim AS runner
-ARG WGCF_VERSION=2.2.30
-ARG WIREPROXY_VERSION=1.1.2
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates curl ffmpeg python3 python3-pip unzip libpixman-1-0 libcairo2 libpango-1.0-0 libjpeg62-turbo libgif7 librsvg2-2 \
+ && apt-get install -y --no-install-recommends ca-certificates curl ffmpeg python3 python3-pip libpixman-1-0 libcairo2 libpango-1.0-0 libjpeg62-turbo libgif7 librsvg2-2 \
  && rm -rf /var/lib/apt/lists/* \
  && curl -fsSL https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download/yt-dlp \
       -o /usr/local/bin/yt-dlp \
@@ -45,14 +46,7 @@ RUN apt-get update \
  && pip3 install --break-system-packages --no-cache-dir --target /tmp/bgutil-py bgutil-ytdlp-pot-provider \
  && mkdir -p /etc/yt-dlp/plugins/bgutil-ytdlp-pot-provider \
  && cp -r /tmp/bgutil-py/yt_dlp_plugins /etc/yt-dlp/plugins/bgutil-ytdlp-pot-provider/ \
- && rm -rf /tmp/bgutil-py \
- && curl -fsSL "https://github.com/ViRb3/wgcf/releases/download/v${WGCF_VERSION}/wgcf_${WGCF_VERSION}_linux_amd64" \
-      -o /usr/local/bin/wgcf \
- && chmod +x /usr/local/bin/wgcf \
- && curl -fsSL "https://github.com/whyvl/wireproxy/releases/download/v${WIREPROXY_VERSION}/wireproxy_linux_amd64.tar.gz" \
-    | tar -xz -C /usr/local/bin wireproxy \
- && chmod +x /usr/local/bin/wireproxy \
- && wgcf help >/dev/null && wireproxy --version
+ && rm -rf /tmp/bgutil-py
 
 # Generator (built JS + its prod deps). Path is referenced explicitly from server.js
 # via --extractor-args, so it doesn't depend on whatever $HOME resolves to at runtime.

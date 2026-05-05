@@ -68,20 +68,23 @@ if (!POT_AVAILABLE) {
   console.log(`yt-dlp: bgutil PO-token plugin detected, HTTP provider at ${POT_HTTP_BASE}`);
 }
 
-// WARP bring-up runs in the background (see entrypoint.sh) so Node can boot
-// immediately for the health check. The proxy URL lands in $WARP_PROXY_FILE
-// once the SOCKS tunnel is verified. Reading it lazily means yt-dlp picks the
-// proxy up on the first extraction after WARP is ready — no restart needed.
-const WARP_PROXY_FILE = process.env.WARP_PROXY_FILE || "/tmp/warp-proxy.url";
+// Egress proxy: yt-dlp routes through this so YouTube sees a residential IP
+// instead of the DO datacenter one (DO IPs hit LOGIN_REQUIRED at the player
+// API). Set EGRESS_PROXY_URL on DO to a SOCKS5 URL like
+//   socks5h://user:pass@0.tcp.ngrok.io:12345
+// pointing at a SOCKS proxy on your home machine exposed via ngrok TCP — see
+// scripts/home-egress.sh. Read lazily so a restart isn't needed if the env
+// changes via DO's runtime config.
+function getEgressProxyUrl() {
+  return process.env.EGRESS_PROXY_URL || null;
+}
 
-function getWarpProxyUrl() {
-  if (process.env.WARP_PROXY_URL) return process.env.WARP_PROXY_URL;
-  try {
-    const v = fs.readFileSync(WARP_PROXY_FILE, "utf8").trim();
-    return v || null;
-  } catch {
-    return null;
-  }
+if (getEgressProxyUrl()) {
+  // Don't log credentials if the URL embeds them.
+  const safe = getEgressProxyUrl().replace(/:\/\/[^@]+@/, "://***@");
+  console.log(`yt-dlp: routing extraction through egress proxy ${safe}`);
+} else {
+  console.warn("yt-dlp: EGRESS_PROXY_URL not set — extraction will use DO's egress IP and likely hit YouTube's bot-wall");
 }
 
 // videoId -> { url, expiresAt }
@@ -526,8 +529,8 @@ async function extractAudioUrl(videoId) {
   // changes month-to-month. Forcing a specific client mix risks excluding the only
   // one that still works at any given time.
   const baseArgs = ["--no-warnings"];
-  const warpProxy = getWarpProxyUrl();
-  if (warpProxy) baseArgs.push("--proxy", warpProxy);
+  const egressProxy = getEgressProxyUrl();
+  if (egressProxy) baseArgs.push("--proxy", egressProxy);
   if (POT_AVAILABLE) {
     // Point yt-dlp's bgutil:http provider at the HTTP server started by entrypoint.sh.
     // Must be its OWN --extractor-args flag — yt-dlp's ';' separator in a single flag
@@ -690,6 +693,7 @@ function getOrCreateRoom(roomId) {
       mode: "synced",
       hostUserId: null,
       creatorUserId: null,
+      watchPartyHostUserId: null,
       queue: [],
       current: null,
       playback: { playing: false, positionSec: 0, serverUpdatedAt: Date.now() },
@@ -843,6 +847,7 @@ function snapshot(room, youUserId) {
     repeat: room.repeat || "off",
     hostUserId: room.hostUserId,
     creatorUserId: room.creatorUserId || null,
+    watchPartyHostUserId: room.watchPartyHostUserId || null,
     queue: room.queue,
     current: room.current,
     playback: {
@@ -1020,6 +1025,14 @@ app.prepare().then(() => {
 
   io.on("connection", (socket) => {
     let userId = nanoid(8);
+
+    // Cristian's-algorithm clock sync. Client measures RTT and computes the
+    // skew between its wall clock and ours, then uses serverNow() in playback
+    // extrapolation so all clients converge on the same target position
+    // regardless of how far each user's machine clock drifts from real time.
+    socket.on("time_sync", (_payload, ack) => {
+      if (typeof ack === "function") ack({ serverTs: Date.now() });
+    });
 
     socket.on("subscribe_browse", (_payload, ack) => {
       socket.join("browse");
@@ -1535,6 +1548,63 @@ app.prepare().then(() => {
       });
     });
 
+    // ── Watch party (WebRTC screen-share) ─────────────────────────
+    // Server's role here is purely a signaling relay: we forward offer/answer
+    // SDPs and ICE candidates between the host and each viewer, and we track
+    // who the active screen-share host is so late-joiners can see one is in
+    // progress. The actual media never touches the server.
+    function findSocketIdByUser(roomId, userId) {
+      for (const [sid, ref] of socketIndex.entries()) {
+        if (ref.roomId === roomId && ref.userId === userId) return sid;
+      }
+      return null;
+    }
+
+    socket.on("wp_start", () => {
+      const ref = socketIndex.get(socket.id);
+      if (!ref) return;
+      const room = rooms.get(ref.roomId);
+      if (!room) return;
+      // First-writer-wins: someone else's share takes priority. If the room
+      // already has a host, the requester just gets ignored — no error spam.
+      if (room.watchPartyHostUserId && room.watchPartyHostUserId !== ref.userId) return;
+      room.watchPartyHostUserId = ref.userId;
+      io.to(room.id).emit("wp_started", { hostUserId: ref.userId });
+    });
+
+    socket.on("wp_stop", () => {
+      const ref = socketIndex.get(socket.id);
+      if (!ref) return;
+      const room = rooms.get(ref.roomId);
+      if (!room) return;
+      if (room.watchPartyHostUserId !== ref.userId) return;
+      room.watchPartyHostUserId = null;
+      io.to(room.id).emit("wp_stopped");
+    });
+
+    // Viewer announces "I'm here, send me an offer". Used when a viewer joins
+    // mid-share — the host can't broadcast offers to everyone, it needs each
+    // viewer to identify itself.
+    socket.on("wp_request_offer", () => {
+      const ref = socketIndex.get(socket.id);
+      if (!ref) return;
+      const room = rooms.get(ref.roomId);
+      if (!room || !room.watchPartyHostUserId) return;
+      if (room.watchPartyHostUserId === ref.userId) return; // host can't request from itself
+      const hostSocketId = findSocketIdByUser(ref.roomId, room.watchPartyHostUserId);
+      if (!hostSocketId) return;
+      io.to(hostSocketId).emit("wp_viewer_ready", { viewerUserId: ref.userId });
+    });
+
+    // Generic relay for offer/answer/candidate. {toUserId, payload}.
+    socket.on("wp_signal", ({ toUserId, payload }) => {
+      const ref = socketIndex.get(socket.id);
+      if (!ref || !toUserId) return;
+      const targetSocketId = findSocketIdByUser(ref.roomId, toUserId);
+      if (!targetSocketId) return;
+      io.to(targetSocketId).emit("wp_signal", { fromUserId: ref.userId, payload });
+    });
+
     socket.on("disconnect", () => {
       const ref = socketIndex.get(socket.id);
       socketIndex.delete(socket.id);
@@ -1547,6 +1617,11 @@ app.prepare().then(() => {
         const remaining = Array.from(room.users.keys());
         room.hostUserId = remaining[0] || null;
         broadcastMode(io, room);
+      }
+      // If the screen-share host disconnected, end the watchparty for everyone.
+      if (room.watchPartyHostUserId === ref.userId) {
+        room.watchPartyHostUserId = null;
+        io.to(room.id).emit("wp_stopped");
       }
       if (room.users.size === 0) {
         scheduleCleanup(room.id);

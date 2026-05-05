@@ -6,3 +6,11 @@ out
 *.log
 .DS_Store
 uploads/
+
+# TypeScript incremental compile cache — machine-local, no value to share.
+tsconfig.tsbuildinfo
+
+# Next.js auto-generates this on first `npm run dev` / `npm run build`. The
+# import path inside flips between dev and prod, so committing it produces
+# constant phantom diffs across machines.
+next-env.d.ts
