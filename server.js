@@ -52,19 +52,20 @@ const YTDLP_PATH = process.env.YTDLP_PATH || "yt-dlp";
 // the bgutil-ytdlp-pot-provider plugin) is the combination that returns plain HTTPS
 // audio URLs from datacenter IPs.
 //
-// Paths below match what the Dockerfile installs. They're absolute (not under $HOME)
-// so plugin discovery doesn't depend on which user the container runs as. The script
-// path is passed to yt-dlp explicitly via --extractor-args for the same reason.
-const POT_GENERATOR_PATH = process.env.POT_GENERATOR_PATH || "/opt/bgutil-pot/server/build/generate_once.js";
+// bgutil v1.3+ dropped the Node.js "script" provider. It now ships "script-deno"
+// (needs Deno) and "http" (needs a running server). entrypoint.sh starts the HTTP
+// server on $POT_PORT (default 4416); we tell yt-dlp to reach it via extractor-args.
 const POT_PLUGIN_PATH = process.env.POT_PLUGIN_PATH || "/etc/yt-dlp/plugins/bgutil-ytdlp-pot-provider";
-const POT_AVAILABLE = fs.existsSync(POT_GENERATOR_PATH) && fs.existsSync(POT_PLUGIN_PATH);
+const POT_HTTP_PORT = process.env.POT_PORT || "4416";
+const POT_HTTP_BASE = `http://127.0.0.1:${POT_HTTP_PORT}`;
+const POT_AVAILABLE = fs.existsSync(POT_PLUGIN_PATH);
 if (!POT_AVAILABLE) {
   console.warn(
-    `yt-dlp: bgutil PO-token provider not installed (looked at ${POT_PLUGIN_PATH} and ${POT_GENERATOR_PATH}) — ` +
+    `yt-dlp: bgutil PO-token plugin not found at ${POT_PLUGIN_PATH} — ` +
     "extraction will fail with the YouTube bot-wall error from datacenter IPs."
   );
 } else {
-  console.log(`yt-dlp: bgutil PO-token provider detected (script: ${POT_GENERATOR_PATH}), cookieless extraction enabled`);
+  console.log(`yt-dlp: bgutil PO-token plugin detected, HTTP provider at ${POT_HTTP_BASE}`);
 }
 
 // Egress proxy: yt-dlp routes through this so YouTube sees a residential IP
@@ -531,12 +532,10 @@ async function extractAudioUrl(videoId) {
   const egressProxy = getEgressProxyUrl();
   if (egressProxy) baseArgs.push("--proxy", egressProxy);
   if (POT_AVAILABLE) {
-    // Tell the bgutil plugin where its server dir lives. Plugin IE-key is
-    // `youtubepot-bgutilscript`, key is `server_home`, value = dir containing
-    // build/generate_once.js. Must be its OWN --extractor-args flag — yt-dlp's
-    // ';' separator in a single flag drops the second key/value silently.
-    const serverHome = path.dirname(path.dirname(POT_GENERATOR_PATH));
-    baseArgs.push("--extractor-args", `youtubepot-bgutilscript:server_home=${serverHome}`);
+    // Point yt-dlp's bgutil:http provider at the HTTP server started by entrypoint.sh.
+    // Must be its OWN --extractor-args flag — yt-dlp's ';' separator in a single flag
+    // drops the second key/value silently.
+    baseArgs.push("--extractor-args", `youtubepot-bgutilhttp:base_url=${POT_HTTP_BASE}`);
     // Force a client that requires a PO token. On DO datacenter IPs, yt-dlp's default
     // player_client list (currently "tv,web,…") starts with android_vr-family clients
     // that DON'T require PO tokens, so the bgutil plugin never gets called and we
