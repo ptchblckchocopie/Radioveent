@@ -87,7 +87,7 @@ function getEgressProxyUrl() {
 if (getEgressProxyUrl()) {
   // Don't log credentials if the URL embeds them.
   const safe = getEgressProxyUrl().replace(/:\/\/[^@]+@/, "://***@");
-  console.log(`yt-dlp: routing extraction through egress proxy ${safe} (via ALL_PROXY env, NO_PROXY=localhost)`);
+  console.log(`yt-dlp: routing extraction through egress proxy ${safe} (--proxy, POT via script-node only)`);
 } else {
   console.warn("yt-dlp: EGRESS_PROXY_URL not set — extraction will use DO's egress IP and likely hit YouTube's bot-wall");
 }
@@ -535,32 +535,39 @@ async function extractAudioUrl(videoId) {
   // one that still works at any given time.
   const baseArgs = ["--no-warnings"];
   const egressProxy = getEgressProxyUrl();
+  // --proxy is required for SOCKS5 — Python's urllib only handles SOCKS5 when
+  // yt-dlp explicitly configures it via --proxy. Environment variables (ALL_PROXY)
+  // are read into the proxy map but urllib can't actually connect through them
+  // for SOCKS5 (it hangs until timeout with zero output).
+  if (egressProxy) baseArgs.push("--proxy", egressProxy);
 
   // yt-dlp's JS runtime detection (shutil.which) can miss Node when PATH is
   // narrowed by the container orchestrator. Force it explicitly so JS challenges
   // and PO-token script-node generation work.
   baseArgs.push("--js-runtimes", "node");
 
-  // Always configure the PO-token HTTP provider when the plugin is present.
-  // YouTube now requires PO tokens even from residential IPs. We use env-based
-  // proxy (ALL_PROXY) instead of --proxy so that NO_PROXY=127.0.0.1 is respected
-  // and the POT HTTP request to localhost:4416 stays local.
   if (POT_AVAILABLE) {
-    baseArgs.push("--extractor-args", `youtubepot-bgutilhttp:base_url=${POT_HTTP_BASE}`);
-    baseArgs.push("--extractor-args", `youtubepot-bgutilscript:server_home=${POT_SERVER_HOME}`);
+    if (egressProxy) {
+      // With --proxy, ALL requests go through the SOCKS tunnel — including the
+      // bgutil:http provider's request to 127.0.0.1:4416, which would hit
+      // localhost on the HOME machine where nothing listens. So we only configure
+      // the script-node provider, which runs generate_once.js as a local child
+      // process (no HTTP, no proxy involvement). The http provider will still be
+      // discovered (plugin installed) but left unconfigured so it uses defaults
+      // and fails fast, falling back to script-node.
+      baseArgs.push("--extractor-args", `youtubepot-bgutilscript:server_home=${POT_SERVER_HOME}`);
+    } else {
+      // No proxy — HTTP provider can reach localhost:4416 directly.
+      baseArgs.push("--extractor-args", `youtubepot-bgutilhttp:base_url=${POT_HTTP_BASE}`);
+      baseArgs.push("--extractor-args", `youtubepot-bgutilscript:server_home=${POT_SERVER_HOME}`);
+    }
   }
 
   const url = `https://www.youtube.com/watch?v=${videoId}`;
 
-  // Use env-based proxy instead of --proxy CLI flag. Python's urllib respects
-  // NO_PROXY when proxies come from environment variables, but --proxy overrides
-  // all env-based proxy resolution — which broke POT HTTP requests to localhost.
   const ytdlpEnv = { ...process.env };
   if (!ytdlpEnv.PATH || !ytdlpEnv.PATH.includes("/usr/local/bin")) {
     ytdlpEnv.PATH = `/usr/local/bin:/usr/bin:/bin${ytdlpEnv.PATH ? `:${ytdlpEnv.PATH}` : ""}`;
-  }
-  if (egressProxy) {
-    ytdlpEnv.ALL_PROXY = egressProxy;
   }
   ytdlpEnv.NO_PROXY = "127.0.0.1,localhost,::1";
   const execOpts = { timeout: 60000, maxBuffer: 1024 * 1024, env: ytdlpEnv };
