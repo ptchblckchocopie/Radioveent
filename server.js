@@ -77,7 +77,10 @@ if (!POT_AVAILABLE) {
 // scripts/home-egress.sh). Read lazily so a restart isn't needed if the env
 // changes via DO's runtime config.
 function getEgressProxyUrl() {
-  return process.env.EGRESS_PROXY_URL || null;
+  // Trim whitespace — DO's env-var UI preserves trailing spaces on paste,
+  // which yt-dlp then chokes on with "Port could not be cast to integer".
+  const v = (process.env.EGRESS_PROXY_URL || "").trim();
+  return v || null;
 }
 
 if (getEgressProxyUrl()) {
