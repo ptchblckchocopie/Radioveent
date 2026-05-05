@@ -45,6 +45,7 @@ RUN apt-get update \
  && curl -fsSL https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download/yt-dlp \
       -o /usr/local/bin/yt-dlp \
  && chmod +x /usr/local/bin/yt-dlp \
+ && pip3 install --break-system-packages --no-cache-dir pysocks \
  && pip3 install --break-system-packages --no-cache-dir --target /tmp/bgutil-py bgutil-ytdlp-pot-provider \
  && mkdir -p /etc/yt-dlp/plugins/bgutil-ytdlp-pot-provider \
  && cp -r /tmp/bgutil-py/yt_dlp_plugins /etc/yt-dlp/plugins/bgutil-ytdlp-pot-provider/ \
