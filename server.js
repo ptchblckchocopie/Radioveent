@@ -549,13 +549,12 @@ async function extractAudioUrl(videoId) {
     // yt-dlp's ';' separator in a single flag drops the second key/value silently.
     baseArgs.push("--extractor-args", `youtubepot-bgutilhttp:base_url=${POT_HTTP_BASE}`);
     baseArgs.push("--extractor-args", `youtubepot-bgutilscript:server_home=${POT_SERVER_HOME}`);
-    // Force a client that requires a PO token. On DO datacenter IPs, yt-dlp's default
-    // player_client list (currently "tv,web,…") starts with android_vr-family clients
-    // that DON'T require PO tokens, so the bgutil plugin never gets called and we
-    // hit LOGIN_REQUIRED. `android` requires PO, returns plain HTTPS URLs (not SABR),
-    // and bgutil generates the token. web_safari and android_vr are fallbacks if YouTube
-    // changes android client policy.
-    baseArgs.push("--extractor-args", "youtube:player_client=android,web_safari,android_vr");
+    // DON'T force specific player clients. With a residential egress IP (via
+    // Tailscale), yt-dlp's default client selection should work — it adapts to
+    // YouTube's anti-bot changes month-to-month. Forcing android/web_safari/
+    // android_vr broke extraction when those clients started requiring login
+    // regardless of PO tokens. The bgutil providers are still configured so
+    // yt-dlp can generate PO tokens if any default client needs one.
   }
 
   const url = `https://www.youtube.com/watch?v=${videoId}`;
@@ -570,7 +569,7 @@ async function extractAudioUrl(videoId) {
     ytdlpEnv.PATH = `/usr/local/bin:/usr/bin:/bin${ytdlpEnv.PATH ? `:${ytdlpEnv.PATH}` : ""}`;
   }
   ytdlpEnv.no_proxy = "127.0.0.1,localhost,::1";
-  const execOpts = { timeout: 20000, maxBuffer: 1024 * 1024, env: ytdlpEnv };
+  const execOpts = { timeout: 45000, maxBuffer: 1024 * 1024, env: ytdlpEnv };
 
   try {
     const { stdout } = await execFileAsync(
@@ -591,7 +590,7 @@ async function extractAudioUrl(videoId) {
       const { stdout, stderr } = await execFileAsync(
         YTDLP_PATH,
         ["-v", "--list-formats", ...baseArgs, url],
-        { ...execOpts, timeout: 25000 }
+        { ...execOpts, timeout: 30000 }
       );
       diag = (stderr || stdout || "").slice(0, 6000);
     } catch (le) {
