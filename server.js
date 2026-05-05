@@ -543,11 +543,12 @@ async function extractAudioUrl(videoId) {
   baseArgs.push("--js-runtimes", "node");
 
   if (POT_AVAILABLE) {
-    // Configure BOTH PO-token providers — http (primary) and script-node (fallback).
-    // Each needs its OWN --extractor-args flag; yt-dlp's ';' separator in a single
-    // flag drops the second key/value silently.
+    // Configure BOTH PO-token providers — http (primary) and script (fallback).
+    // The script key is shared by script-node and script-deno; yt-dlp picks the
+    // available runtime automatically. Each needs its OWN --extractor-args flag;
+    // yt-dlp's ';' separator in a single flag drops the second key/value silently.
     baseArgs.push("--extractor-args", `youtubepot-bgutilhttp:base_url=${POT_HTTP_BASE}`);
-    baseArgs.push("--extractor-args", `youtubepot-bgutilscriptnode:server_home=${POT_SERVER_HOME}`);
+    baseArgs.push("--extractor-args", `youtubepot-bgutilscript:server_home=${POT_SERVER_HOME}`);
     // Force a client that requires a PO token. On DO datacenter IPs, yt-dlp's default
     // player_client list (currently "tv,web,…") starts with android_vr-family clients
     // that DON'T require PO tokens, so the bgutil plugin never gets called and we
@@ -561,10 +562,14 @@ async function extractAudioUrl(videoId) {
 
   // Ensure yt-dlp inherits a PATH that includes Node — DO's runtime can narrow
   // the PATH so yt-dlp's shutil.which('node') fails with "JS runtimes: none".
+  // Also set no_proxy so the bgutil HTTP request to 127.0.0.1:4416 doesn't get
+  // routed through the SOCKS egress proxy (which would try to reach localhost on
+  // the HOME machine, where nothing listens on :4416).
   const ytdlpEnv = { ...process.env };
   if (!ytdlpEnv.PATH || !ytdlpEnv.PATH.includes("/usr/local/bin")) {
     ytdlpEnv.PATH = `/usr/local/bin:/usr/bin:/bin${ytdlpEnv.PATH ? `:${ytdlpEnv.PATH}` : ""}`;
   }
+  ytdlpEnv.no_proxy = "127.0.0.1,localhost,::1";
   const execOpts = { timeout: 20000, maxBuffer: 1024 * 1024, env: ytdlpEnv };
 
   try {
