@@ -69,55 +69,45 @@ if (!POT_AVAILABLE) {
   console.log(`yt-dlp: bgutil PO-token plugin detected, HTTP=${POT_HTTP_BASE}, script-node=${POT_SERVER_HOME}`);
 }
 
-// Egress proxy: yt-dlp routes through this so YouTube sees a residential IP
-// instead of the DO datacenter one (DO IPs hit LOGIN_REQUIRED at the player
-// API). Set EGRESS_PROXY_URL on DO to a SOCKS5 URL like
-//   socks5h://user:pass@100.x.x.x:1080
-// pointing at microsocks on the home machine, reached over the Tailscale
-// tailnet that the container joins via TS_AUTHKEY (see entrypoint.sh and
-// scripts/home-egress.sh). Read lazily so a restart isn't needed if the env
-// changes via DO's runtime config.
+// Egress proxy: Tailscale exit node routes all traffic through a home PC
+// (residential IP). tailscaled runs a local HTTP proxy on :1055 that handles
+// routing through the tailnet. yt-dlp uses --proxy http://127.0.0.1:1055.
+// Set TS_EXIT_NODE on DO to the home PC's Tailscale hostname or IP.
+// Falls back to EGRESS_PROXY_URL if set (legacy direct-proxy mode).
+const TS_PROXY_PORT = process.env.TS_PROXY_PORT || "1055";
+const TS_PROXY_URL = `http://127.0.0.1:${TS_PROXY_PORT}`;
+
 function getEgressProxyUrl() {
-  // Trim whitespace — DO's env-var UI preserves trailing spaces on paste,
-  // which yt-dlp then chokes on with "Port could not be cast to integer".
+  // Prefer Tailscale local proxy if exit node is configured
+  if (process.env.TS_EXIT_NODE) return TS_PROXY_URL;
+  // Legacy fallback: direct proxy URL
   const v = (process.env.EGRESS_PROXY_URL || "").trim();
   return v || null;
 }
 
-if (getEgressProxyUrl()) {
+if (process.env.TS_EXIT_NODE) {
+  console.log(`yt-dlp: routing via Tailscale exit node (${process.env.TS_EXIT_NODE}), local proxy ${TS_PROXY_URL}`);
+} else if (getEgressProxyUrl()) {
   const safe = getEgressProxyUrl().replace(/:\/\/[^@]+@/, "://***@");
-  console.log(`yt-dlp: routing extraction through egress proxy ${safe} (--proxy http, POT via script-node)`);
+  console.log(`yt-dlp: routing extraction through egress proxy ${safe}`);
+} else {
+  console.warn("yt-dlp: no exit node or proxy — extraction will use DO's egress IP and likely hit YouTube's bot-wall");
+}
 
-  // Startup connectivity tests
+// Startup connectivity test
+if (getEgressProxyUrl()) {
   const { exec } = require("child_process");
-
-  // 1. Can curl reach YouTube through the proxy?
   exec(
     `curl -x "${getEgressProxyUrl()}" -s -o /dev/null -w "%{http_code}" --connect-timeout 10 https://www.youtube.com`,
     { timeout: 15000 },
     (err, stdout) => {
       if (err) {
-        console.error(`STARTUP TEST 1 (curl via proxy): FAILED — ${err.killed ? "TIMEOUT" : err.message}`);
+        console.error(`STARTUP TEST (curl via proxy): FAILED — ${err.killed ? "TIMEOUT" : err.message}`);
       } else {
-        console.log(`STARTUP TEST 1 (curl via proxy): HTTP ${stdout.trim()}`);
+        console.log(`STARTUP TEST (curl via proxy): HTTP ${stdout.trim()}`);
       }
     }
   );
-
-  // 2. Can yt-dlp reach YouTube through the proxy? (just fetch title, no audio)
-  exec(
-    `yt-dlp --proxy "${getEgressProxyUrl()}" --print title -v --no-warnings https://www.youtube.com/watch?v=dQw4w9WgXcQ 2>&1 | head -30`,
-    { timeout: 30000 },
-    (err, stdout) => {
-      if (err) {
-        console.error(`STARTUP TEST 2 (yt-dlp via proxy): FAILED — ${err.killed ? "TIMEOUT" : err.message}`);
-      } else {
-        console.log(`STARTUP TEST 2 (yt-dlp via proxy):\n${(stdout || "").slice(0, 1500)}`);
-      }
-    }
-  );
-} else {
-  console.warn("yt-dlp: EGRESS_PROXY_URL not set — extraction will use DO's egress IP and likely hit YouTube's bot-wall");
 }
 
 // videoId -> { url, expiresAt }
@@ -563,21 +553,17 @@ async function extractAudioUrl(videoId) {
   // one that still works at any given time.
   const baseArgs = ["--no-warnings"];
   const egressProxy = getEgressProxyUrl();
-  // --proxy is the ONLY way yt-dlp actually routes traffic through a proxy.
-  // Environment variables (ALL_PROXY) are logged in the proxy map but NOT
-  // used for actual connections by yt-dlp's urllib request handler.
-  // Using http:// (not socks5h://) so urllib handles it natively without PySocks.
+  // --proxy routes yt-dlp traffic through the Tailscale local HTTP proxy
+  // (127.0.0.1:1055) which exits through the home PC's residential IP.
   if (egressProxy) baseArgs.push("--proxy", egressProxy);
 
-  // yt-dlp's JS runtime detection (shutil.which) can miss Node when PATH is
-  // narrowed by the container orchestrator. Force it explicitly so JS challenges
-  // and PO-token script-node generation work.
   baseArgs.push("--js-runtimes", "node");
 
-  // With --proxy, ALL HTTP traffic goes through the tunnel — including the
-  // bgutil:http provider's request to 127.0.0.1:4416 (which would hit the
-  // HOME machine, not the container). Only configure bgutil:script-node which
-  // runs generate_once.js as a local child process (no HTTP involved).
+  // Configure PO-token providers. With the Tailscale exit node approach,
+  // --proxy points at 127.0.0.1:1055 (Tailscale's local proxy). The POT
+  // HTTP provider's request to 127.0.0.1:4416 would also get proxied and
+  // exit through the home PC (where nothing listens on :4416). So we
+  // configure both but prefer script-node which runs locally.
   if (POT_AVAILABLE) {
     baseArgs.push("--extractor-args", `youtubepot-bgutilscript:server_home=${POT_SERVER_HOME}`);
   }
