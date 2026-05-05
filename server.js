@@ -87,7 +87,7 @@ function getEgressProxyUrl() {
 if (getEgressProxyUrl()) {
   // Don't log credentials if the URL embeds them.
   const safe = getEgressProxyUrl().replace(/:\/\/[^@]+@/, "://***@");
-  console.log(`yt-dlp: routing extraction through egress proxy ${safe} (ALL_PROXY+PySocks, NO_PROXY=localhost)`);
+  console.log(`yt-dlp: routing extraction through egress proxy ${safe} (ALL_PROXY env, NO_PROXY=localhost)`);
 } else {
   console.warn("yt-dlp: EGRESS_PROXY_URL not set — extraction will use DO's egress IP and likely hit YouTube's bot-wall");
 }
