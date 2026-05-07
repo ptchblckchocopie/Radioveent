@@ -630,6 +630,25 @@ async function extractAudioUrl(videoId) {
   }
 }
 
+// Memory safety: each yt-dlp + bgutil POT generation peaks around 150–250 MB.
+// On the 512 MB DO plan, two parallel extractions for *different* videoIds
+// occasionally pushed the container into OOM-kill territory, which wipes all
+// in-memory room state and makes queues "vanish" mid-extraction. This chain
+// serializes extractions so at most one yt-dlp runs at a time. Identical
+// videoIds still collapse via inFlightExtractions; this only queues distinct
+// videos behind each other.
+let extractionChain = Promise.resolve();
+function extractSerialized(videoId) {
+  // .then handles both fulfilled and rejected predecessors so a single failed
+  // extraction doesn't block the queue.
+  const next = extractionChain.then(
+    () => extractAudioUrl(videoId),
+    () => extractAudioUrl(videoId)
+  );
+  extractionChain = next.catch(() => {});
+  return next;
+}
+
 async function getAudioUrlCached(videoId, force = false) {
   if (!force) {
     const cached = audioUrlCache.get(videoId);
@@ -637,7 +656,7 @@ async function getAudioUrlCached(videoId, force = false) {
     const inflight = inFlightExtractions.get(videoId);
     if (inflight) return inflight;
   }
-  const promise = extractAudioUrl(videoId)
+  const promise = extractSerialized(videoId)
     .then((url) => {
       audioUrlCache.set(videoId, { url, expiresAt: Date.now() + AUDIO_URL_TTL_MS });
       return url;
