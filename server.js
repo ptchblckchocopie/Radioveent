@@ -78,11 +78,17 @@ const TS_PROXY_PORT = process.env.TS_PROXY_PORT || "1055";
 const TS_PROXY_URL = `http://127.0.0.1:${TS_PROXY_PORT}`;
 
 function getEgressProxyUrl() {
-  // Prefer Tailscale local proxy if exit node is configured
+  // Prefer the explicit egress URL — this is the always-on WARP Droplet
+  // (see scripts/warp-egress-setup.sh) reached over tailnet. It has
+  // Cloudflare-network speeds and no home-PC dependency, so it wins over
+  // the legacy Tailscale-exit-node mode whenever both are set.
+  const explicit = (process.env.EGRESS_PROXY_URL || "").trim();
+  if (explicit) return explicit;
+  // Fallback: route via the home PC's Tailscale exit node. Only kicks in
+  // if EGRESS_PROXY_URL is unset/empty, e.g. the WARP Droplet was torn
+  // down or the env var was cleared.
   if (process.env.TS_EXIT_NODE) return TS_PROXY_URL;
-  // Legacy fallback: direct proxy URL
-  const v = (process.env.EGRESS_PROXY_URL || "").trim();
-  return v || null;
+  return null;
 }
 
 if (process.env.TS_EXIT_NODE) {
