@@ -47,7 +47,6 @@ fi
 
 ARCH="$(dpkg --print-architecture)"   # amd64 / arm64
 WGCF_VER="2.2.21"
-WIREPROXY_VER="1.0.10"
 
 # ── 1. Tailscale ─────────────────────────────────────────────────────────────
 echo "==> Installing Tailscale"
@@ -64,13 +63,37 @@ if ! command -v wgcf >/dev/null 2>&1; then
 fi
 
 # ── 3. wireproxy ─────────────────────────────────────────────────────────────
-echo "==> Installing wireproxy $WIREPROXY_VER ($ARCH)"
+# Use GitHub's /latest/download/ redirect so we don't break when the upstream
+# bumps versions. Asset names vary by repo — try the common patterns in order.
+echo "==> Installing wireproxy (latest, $ARCH)"
 if ! command -v wireproxy >/dev/null 2>&1; then
   TMP="$(mktemp -d)"
-  curl -fsSL "https://github.com/whyvl/wireproxy/releases/download/v${WIREPROXY_VER}/wireproxy_linux_${ARCH}.tar.gz" \
-    -o "$TMP/wireproxy.tgz"
+  WIREPROXY_OK=""
+  for ASSET in \
+    "wireproxy_linux_${ARCH}.tar.gz" \
+    "wireproxy_${ARCH}.tar.gz" \
+    "wireproxy-linux-${ARCH}.tar.gz"; do
+    URL="https://github.com/whyvl/wireproxy/releases/latest/download/${ASSET}"
+    if curl -fsSL "$URL" -o "$TMP/wireproxy.tgz" 2>/dev/null; then
+      echo "    fetched $ASSET"
+      WIREPROXY_OK=1
+      break
+    fi
+  done
+  if [[ -z "$WIREPROXY_OK" ]]; then
+    echo "ERROR: could not download wireproxy from any known asset name." >&2
+    echo "Check https://github.com/whyvl/wireproxy/releases/latest manually." >&2
+    exit 1
+  fi
   tar -xzf "$TMP/wireproxy.tgz" -C "$TMP"
-  install -m 0755 "$TMP/wireproxy" /usr/local/bin/wireproxy
+  # Binary may be named 'wireproxy' or in a subdir; find it.
+  BIN="$(find "$TMP" -type f -name 'wireproxy' -executable | head -1)"
+  if [[ -z "$BIN" ]]; then
+    echo "ERROR: tarball did not contain a wireproxy binary." >&2
+    ls -R "$TMP" >&2
+    exit 1
+  fi
+  install -m 0755 "$BIN" /usr/local/bin/wireproxy
   rm -rf "$TMP"
 fi
 
