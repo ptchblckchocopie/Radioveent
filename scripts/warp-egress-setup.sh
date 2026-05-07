@@ -102,9 +102,16 @@ echo "==> Registering Cloudflare WARP account"
 mkdir -p /etc/wireproxy
 cd /etc/wireproxy
 if [[ ! -f wgcf-account.toml ]]; then
-  yes | wgcf register
+  # Use --accept-tos rather than `yes | wgcf register`. The pipe trick caused
+  # `yes` to receive SIGPIPE/exit-1 when wgcf closed stdin, and `set -o pipefail`
+  # then aborted the whole script *after* registration had succeeded.
+  wgcf register --accept-tos
 fi
 wgcf generate
+if [[ ! -f wgcf-profile.conf ]]; then
+  echo "ERROR: wgcf generate did not produce wgcf-profile.conf" >&2
+  exit 1
+fi
 
 # ── 5. Build wireproxy config ────────────────────────────────────────────────
 PROXY_USER="warp"
