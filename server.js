@@ -113,6 +113,10 @@ if (getEgressProxyUrl()) {
 // videoId -> { url, expiresAt }
 const audioUrlCache = new Map();
 const AUDIO_URL_TTL_MS = 5 * 60 * 60 * 1000; // 5 hours
+// videoId -> Promise<url>: single-flight extractions. Without this every
+// viewer in a synced room spawns its own yt-dlp on track change, hammering
+// the home-PC exit node with N parallel extractions of the same URL.
+const inFlightExtractions = new Map();
 
 // videoId -> { lyrics: { synced, plain, title, artist } | null, expiresAt }
 const lyricsCache = new Map();
@@ -624,10 +628,37 @@ async function getAudioUrlCached(videoId, force = false) {
   if (!force) {
     const cached = audioUrlCache.get(videoId);
     if (cached && cached.expiresAt > Date.now()) return cached.url;
+    const inflight = inFlightExtractions.get(videoId);
+    if (inflight) return inflight;
   }
-  const url = await extractAudioUrl(videoId);
-  audioUrlCache.set(videoId, { url, expiresAt: Date.now() + AUDIO_URL_TTL_MS });
-  return url;
+  const promise = extractAudioUrl(videoId)
+    .then((url) => {
+      audioUrlCache.set(videoId, { url, expiresAt: Date.now() + AUDIO_URL_TTL_MS });
+      return url;
+    })
+    .finally(() => {
+      // Guard against a force-refresh racing a non-force inflight: only delete
+      // the map entry if it still points at *this* promise.
+      if (inFlightExtractions.get(videoId) === promise) {
+        inFlightExtractions.delete(videoId);
+      }
+    });
+  inFlightExtractions.set(videoId, promise);
+  return promise;
+}
+
+// Fire-and-forget prefetch. The 3–5 minute window between track-start and
+// track-end is plenty of time to extract the next URL through the tailnet,
+// so by the time the current track ends, the next one's URL is in cache and
+// the user perceives an instant transition. No-ops if already cached, already
+// in-flight, or videoId is missing. Errors are swallowed because
+// extractAudioUrl already logs them.
+function prefetchAudioUrl(videoId) {
+  if (!videoId) return;
+  const cached = audioUrlCache.get(videoId);
+  if (cached && cached.expiresAt > Date.now()) return;
+  if (inFlightExtractions.has(videoId)) return;
+  getAudioUrlCached(videoId).catch(() => {});
 }
 
 const dev = process.env.NODE_ENV !== "production";
@@ -1049,6 +1080,7 @@ function advanceQueue(io, room, opts = {}) {
   setPlayback(room, { playing: !!next, positionSec: 0 });
   broadcastQueue(io, room);
   broadcastPlayback(io, room);
+  prefetchAudioUrl(room.queue[0]?.videoId);
 }
 
 app.prepare().then(() => {
@@ -1151,6 +1183,10 @@ app.prepare().then(() => {
       socket.emit("room_state", snapshot(room, userId));
       broadcastUsers(io, room);
       logActivity(io, room, "user_joined", newUser);
+      // Late joiner: ensure the current track's URL is cached so the joining
+      // client doesn't pay a cold extraction. Also prefetch the upcoming one.
+      prefetchAudioUrl(room.current?.videoId);
+      prefetchAudioUrl(room.queue[0]?.videoId);
       respond({ ok: true });
     });
 
@@ -1329,6 +1365,10 @@ app.prepare().then(() => {
       }
       broadcastQueue(io, room);
       logActivity(io, room, "track_added", adder, { trackTitle: track.title });
+      // Start extraction now so the client's get_audio_url joins our in-flight
+      // promise instead of waiting for the socket round-trip to kick it off.
+      prefetchAudioUrl(room.current?.videoId);
+      prefetchAudioUrl(room.queue[0]?.videoId);
     });
 
     socket.on("add_playlist", async ({ playlistId }) => {
@@ -1382,6 +1422,8 @@ app.prepare().then(() => {
             playlistTitle: pl.title || "playlist",
             count: added,
           });
+          prefetchAudioUrl(room.current?.videoId);
+          prefetchAudioUrl(room.queue[0]?.videoId);
         }
       } catch (e) {
         socket.emit("error_msg", { message: "Could not load playlist." });
@@ -1400,6 +1442,8 @@ app.prepare().then(() => {
         broadcastQueue(io, room);
         const user = room.users.get(ref.userId);
         logActivity(io, room, "track_removed", user, { trackTitle: removed.title });
+        // The next-up may have changed if the removed item was at the head.
+        prefetchAudioUrl(room.queue[0]?.videoId);
       }
     });
 
@@ -1417,6 +1461,7 @@ app.prepare().then(() => {
         broadcastQueue(io, room);
         const user = room.users.get(ref.userId);
         logActivity(io, room, "tracks_removed", user, { count: removedCount });
+        prefetchAudioUrl(room.queue[0]?.videoId);
       }
     });
 
@@ -1456,6 +1501,8 @@ app.prepare().then(() => {
           toIdx: movedToIdx + 1,
         });
       }
+      // The new head of the queue may differ; ensure it's being prefetched.
+      prefetchAudioUrl(room.queue[0]?.videoId);
     });
 
     socket.on("play", () => {
