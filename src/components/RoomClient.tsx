@@ -1219,7 +1219,7 @@ export default function RoomClient({
                     }
                   : null
               }
-              nextVideoId={queue[0]?.videoId ?? null}
+              nextVideoId={null /* Phase 2 client preload disabled — fetching next-track audio in parallel with current was contending with the residential proxy bandwidth and making cold-start worse, not better. Server-side prefetch (Phase 1) still runs. */}
               playing={playback.playing}
               positionSec={playback.positionSec}
               serverUpdatedAt={playback.serverUpdatedAt}
