@@ -1219,6 +1219,7 @@ export default function RoomClient({
                     }
                   : null
               }
+              nextVideoId={queue[0]?.videoId ?? null}
               playing={playback.playing}
               positionSec={playback.positionSec}
               serverUpdatedAt={playback.serverUpdatedAt}

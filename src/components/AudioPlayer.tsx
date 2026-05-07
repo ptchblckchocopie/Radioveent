@@ -12,6 +12,10 @@ type Props = {
     addedByName: string;
     addedByPokemonId: number | null;
   } | null;
+  // The track up next in the queue, used to pre-buffer audio in a hidden
+  // <audio> element while the current track plays. Lets the swap on
+  // track-change resolve from browser cache instead of a fresh CDN fetch.
+  nextVideoId?: string | null;
   playing: boolean;
   positionSec: number;
   serverUpdatedAt: number;
@@ -123,6 +127,7 @@ const TheaterIcon = (
 const AudioPlayer = forwardRef<AudioPlayerHandle, Props>(function AudioPlayer(
   {
     track,
+    nextVideoId,
     playing,
     positionSec,
     serverUpdatedAt,
@@ -144,6 +149,11 @@ const AudioPlayer = forwardRef<AudioPlayerHandle, Props>(function AudioPlayer(
   ref
 ) {
   const audioRef = useRef<HTMLAudioElement>(null);
+  // Hidden sibling element that preloads the upcoming track's stream while
+  // the visible one plays. We never call .play() on it; preload="auto" plus
+  // src is enough for the browser to fetch and cache the bytes.
+  const preloadAudioRef = useRef<HTMLAudioElement>(null);
+  const preloadedRef = useRef<{ videoId: string; url: string } | null>(null);
   const currentVideoIdRef = useRef<string | null>(null);
   const lastEndedFiredFor = useRef<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -231,9 +241,61 @@ const AudioPlayer = forwardRef<AudioPlayerHandle, Props>(function AudioPlayer(
     }
   }
 
+  // Assigns a freshly-resolved stream URL to the visible audio element and
+  // starts playback at the right position. Extracted so both the slow path
+  // (socket fetch) and the preload fast path can share the seek-and-play
+  // logic.
+  function applyAudioSrc(audio: HTMLAudioElement, url: string) {
+    audio.src = url;
+
+    // Seek to the correct server position before play. For a *fresh* start (skip / first
+    // play / repeat-one) the server reports positionSec≈0 — extrapolating by the audio-load
+    // gap would land us 1–2s in, which feels like the new song was "skipped ahead". Snap
+    // to 0 in that case and anchor locally so drift correction doesn't undo it. For
+    // mid-song mounts (theater toggles, host-mode swap) we still extrapolate to stay synced.
+    const seekAndPlay = () => {
+      const { playing: p, positionSec: pos, serverUpdatedAt: ts } = stateRef.current;
+      const isFreshStart = pos < 0.5;
+      const startSec = (p && !isFreshStart) ? pos + (serverNow() - ts) / 1000 : pos;
+      try { audio.currentTime = Math.max(0, startSec); } catch {}
+      if (isFreshStart && p) {
+        // localAnchorRef stores wall-clock timestamps that are compared against
+        // serverUpdatedAt later; keep it on the server-time axis so the two
+        // sides of the comparison are commensurate.
+        localAnchorRef.current = { effectiveTs: serverNow(), positionSec: pos, serverUpdatedAt: ts };
+      }
+      if (p) audio.play().catch(() => setNeedsTap(true));
+    };
+    if (audio.readyState >= 1 /* HAVE_METADATA */) {
+      seekAndPlay();
+    } else {
+      const onMeta = () => {
+        audio.removeEventListener("loadedmetadata", onMeta);
+        seekAndPlay();
+      };
+      audio.addEventListener("loadedmetadata", onMeta);
+    }
+  }
+
   function loadUrl(refresh: boolean) {
     const id = currentVideoIdRef.current;
     if (!id) return;
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    // Fast path: this videoId was preloaded into the hidden <audio> while the
+    // previous track was still playing. The bytes are in the browser's HTTP
+    // cache, so assigning src on the visible element resolves from cache
+    // instead of a fresh CDN fetch — no socket round trip, near-instant play.
+    if (!refresh && preloadedRef.current?.videoId === id) {
+      const url = preloadedRef.current.url;
+      preloadedRef.current = null;
+      setError(null);
+      setLoading(false);
+      applyAudioSrc(audio, url);
+      return;
+    }
+
     setError(null);
     setLoading(true);
     fetchAudioUrl(id, refresh, (resp) => {
@@ -243,37 +305,9 @@ const AudioPlayer = forwardRef<AudioPlayerHandle, Props>(function AudioPlayer(
         setError(resp.error || "Could not load audio");
         return;
       }
-      const audio = audioRef.current;
-      if (!audio) return;
-      audio.src = resp.url;
-
-      // Seek to the correct server position before play. For a *fresh* start (skip / first
-      // play / repeat-one) the server reports positionSec≈0 — extrapolating by the audio-load
-      // gap would land us 1–2s in, which feels like the new song was "skipped ahead". Snap
-      // to 0 in that case and anchor locally so drift correction doesn't undo it. For
-      // mid-song mounts (theater toggles, host-mode swap) we still extrapolate to stay synced.
-      const seekAndPlay = () => {
-        const { playing: p, positionSec: pos, serverUpdatedAt: ts } = stateRef.current;
-        const isFreshStart = pos < 0.5;
-        const startSec = (p && !isFreshStart) ? pos + (serverNow() - ts) / 1000 : pos;
-        try { audio.currentTime = Math.max(0, startSec); } catch {}
-        if (isFreshStart && p) {
-          // localAnchorRef stores wall-clock timestamps that are compared against
-          // serverUpdatedAt later; keep it on the server-time axis so the two
-          // sides of the comparison are commensurate.
-          localAnchorRef.current = { effectiveTs: serverNow(), positionSec: pos, serverUpdatedAt: ts };
-        }
-        if (p) audio.play().catch(() => setNeedsTap(true));
-      };
-      if (audio.readyState >= 1 /* HAVE_METADATA */) {
-        seekAndPlay();
-      } else {
-        const onMeta = () => {
-          audio.removeEventListener("loadedmetadata", onMeta);
-          seekAndPlay();
-        };
-        audio.addEventListener("loadedmetadata", onMeta);
-      }
+      const audioNow = audioRef.current;
+      if (!audioNow) return;
+      applyAudioSrc(audioNow, resp.url);
     });
   }
 
@@ -307,6 +341,41 @@ const AudioPlayer = forwardRef<AudioPlayerHandle, Props>(function AudioPlayer(
     loadUrl(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [videoId]);
+
+  // Pre-buffer the upcoming track in a hidden <audio> element while the
+  // current track plays. By the time the queue advances, the bytes are in
+  // the browser's HTTP cache, so the visible element's load + play resolves
+  // from cache and the user perceives an instant transition. No-ops when
+  // there's nothing up next, when we'd preload the currently-playing track,
+  // or when this videoId is already preloaded.
+  useEffect(() => {
+    const el = preloadAudioRef.current;
+    if (!nextVideoId || nextVideoId === videoId) {
+      preloadedRef.current = null;
+      if (el && el.src) {
+        try { el.pause(); } catch {}
+        el.removeAttribute("src");
+        try { el.load(); } catch {}
+      }
+      return;
+    }
+    if (preloadedRef.current?.videoId === nextVideoId) return;
+    let cancelled = false;
+    fetchAudioUrl(nextVideoId, false, (resp) => {
+      if (cancelled) return;
+      if (resp.error || !resp.url) return;
+      // The track may have already advanced past us in the meantime — bail
+      // rather than overwriting the now-current preload bookkeeping.
+      if (currentVideoIdRef.current === nextVideoId) return;
+      preloadedRef.current = { videoId: nextVideoId, url: resp.url };
+      const node = preloadAudioRef.current;
+      if (node) {
+        node.src = resp.url;
+        try { node.load(); } catch {}
+      }
+    });
+    return () => { cancelled = true; };
+  }, [nextVideoId, videoId, fetchAudioUrl]);
 
   // Apply playback state changes
   useEffect(() => {
@@ -412,6 +481,16 @@ const AudioPlayer = forwardRef<AudioPlayerHandle, Props>(function AudioPlayer(
           }
         }}
         onError={handleAudioError}
+      />
+      {/* Hidden preloader — fetches and buffers the upcoming track so the
+          swap on track-change resolves from browser cache. No event handlers,
+          never plays, kept off-screen. */}
+      <audio
+        ref={preloadAudioRef}
+        preload="auto"
+        muted
+        aria-hidden="true"
+        style={{ position: "absolute", left: -9999, width: 1, height: 1, opacity: 0, pointerEvents: "none" }}
       />
 
       <div className="np-cover">
